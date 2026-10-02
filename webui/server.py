@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -486,15 +487,12 @@ class Handler(BaseHTTPRequestHandler):
         kind = str(data.get("kind") or "dir")
         if kind not in ("dir", "file"):
             raise ValueError(f"不支持的 kind: {kind}")
-        result = _native_pick(kind, title=str(data.get("title") or "请选择"),
-                              initial=str(data.get("initial") or "") or None)
-        if result is _PICK_UNAVAILABLE:
-            self._send_json(
-                {"ok": False, "error": "当前环境不支持系统选择框，请手动输入路径"},
-                status=501,
-            )
+        path, pick_error = _native_pick(kind, title=str(data.get("title") or "请选择"),
+                                       initial=str(data.get("initial") or "") or None)
+        if pick_error:
+            self._send_json({"ok": False, "error": pick_error}, status=501)
             return
-        self._send_json({"ok": True, "path": result})  # path 为 None 表示用户取消
+        self._send_json({"ok": True, "path": path})  # path 为 None 表示用户取消
 
     def _handle_keygen(self, tmpdir):
         data = self._json_body(tmpdir)
@@ -581,9 +579,19 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 
+DATA_DIR_ENV = "FORJIANG_CRYPTO_DATA_DIR"
+
+
 def _default_data_dir():
     """默认数据目录：优先用户主目录下的 forjiang-crypto，避免把密钥/密文
-    写进代码仓库；拿不到可用的主目录时退回服务根目录。"""
+    写进代码仓库；拿不到可用的主目录时退回服务根目录。
+
+    设了环境变量 FORJIANG_CRYPTO_DATA_DIR 就以它为准（测试、临时换盘、
+    多份数据分开存都用得上），省得让使用方往自己的数据目录里塞测试文件。
+    """
+    override = (os.environ.get(DATA_DIR_ENV) or "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
     try:
         home = os.path.expanduser("~")
     except Exception:
@@ -617,42 +625,55 @@ sys.stdout.buffer.write((path or "").encode("utf-8"))
 sys.stdout.buffer.flush()
 """
 
-_CAN_PICK_CACHE = None
+_PICK_PROBE_FALSE_TTL = 60.0
+_CAN_PICK_CACHE = None   # True＝能用（长期有效）；float＝“不能用”的到期时刻
 
 
 def _native_picker_available():
-    """本环境能否弹系统选择框。用子进程探测，服务进程不 import tkinter。"""
+    """本环境能否弹系统选择框。用子进程探测，服务进程不 import tkinter。
+
+    探测成功就长期缓存（tkinter 不会自己消失）；失败只短期缓存——否则一次
+    偶发的子进程调起失败（句柄紧张、fork 被限流）会让这台机器再也弹不出框，
+    而重启服务也看不出原因。到期后重新探，恢复了就自动回来。
+    """
     global _CAN_PICK_CACHE
-    if _CAN_PICK_CACHE is None:
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-c", "import tkinter"],
-                capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
-            )
-            _CAN_PICK_CACHE = proc.returncode == 0
-        except Exception:
-            _CAN_PICK_CACHE = False
-    return _CAN_PICK_CACHE
-
-
-_PICK_UNAVAILABLE = object()
+    now = time.monotonic()
+    if _CAN_PICK_CACHE is True:
+        return True
+    if isinstance(_CAN_PICK_CACHE, float) and now < _CAN_PICK_CACHE:
+        return False
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", "import tkinter"],
+            capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
+        )
+        available = proc.returncode == 0
+    except Exception:
+        available = False
+    _CAN_PICK_CACHE = True if available else now + _PICK_PROBE_FALSE_TTL
+    return available
 
 
 def _native_pick(kind, title="请选择", initial=None):
     """在子进程里弹原生选择框。
 
-    返回选中路径字符串；用户取消返回 None；环境不支持/出错返回 _PICK_UNAVAILABLE。
+    返回 (path, error)。path 为选中路径，用户取消为 None；
+    error 为 None 表示子进程正常退出，否则是给用户看的诊断文字
+    （尽力透传子进程 stderr——macOS 上 tkinter 缺会话、Linux 上没 DISPLAY，
+      只有把原文带出来才查得动，光说"不支持"等于没查）。
     """
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _PICK_CHILD, kind, title, initial or ""],
             capture_output=True, timeout=3600, stdin=subprocess.DEVNULL,
         )
-    except Exception:
-        return _PICK_UNAVAILABLE
+    except Exception as exc:
+        return None, f"调起系统选择框失败：{exc}"
     if proc.returncode != 0:
-        return _PICK_UNAVAILABLE
-    return proc.stdout.decode("utf-8", "replace").strip() or None
+        lines = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        detail = lines[-1].strip() if lines else f"子进程退出码 {proc.returncode}"
+        return None, f"系统选择框调起失败：{detail}"
+    return proc.stdout.decode("utf-8", "replace").strip() or None, None
 
 
 def make_server(host="127.0.0.1", port=8765):

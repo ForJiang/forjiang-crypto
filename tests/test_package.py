@@ -83,7 +83,7 @@ class TestPackage(unittest.TestCase):
         old_versions = pkg.read_versions
         try:
             pkg.read_versions = lambda: (1, 1, 0)
-            self.assertEqual(pkg.bump(out), (1, 1, 1))       # 无同系列包
+            self.assertEqual(pkg.bump(out), (1, 1, 0))       # 该系列还没打过包：原样采用
             open(os.path.join(out, "forjiang-crypto-1.1.5.zip"), "w").close()
             open(os.path.join(out, "forjiang-crypto-1.0.9.zip"), "w").close()
             self.assertEqual(pkg.bump(out), (1, 1, 6))       # 取同系列最大 +1
@@ -91,6 +91,38 @@ class TestPackage(unittest.TestCase):
             self.assertEqual(pkg.bump(out), (1, 1, 6))       # 不会回退到 4
         finally:
             pkg.read_versions = old_versions
+
+    def test_bump_new_series_does_not_skip(self):
+        """--minor/--major 开新系列：该系列没打过包就用整版本号，不跳成 .1。"""
+        out = os.path.join(self.tmp, "out-series")
+        os.makedirs(out, exist_ok=True)
+        old_versions = pkg.read_versions
+        try:
+            pkg.read_versions = lambda: (1, 1, 2)
+            self.assertEqual(pkg.bump(out, step="minor"), (1, 2, 0))
+            self.assertEqual(pkg.bump(out, step="major"), (2, 0, 0))
+            # 新系列已经打过包了，就按已有最大第三位 +1
+            open(os.path.join(out, "forjiang-crypto-1.2.0.zip"), "w").close()
+            self.assertEqual(pkg.bump(out, step="minor"), (1, 2, 1))
+            # 1.1.x 的旧包不该影响 1.2.x 的编号
+            open(os.path.join(out, "forjiang-crypto-1.1.9.zip"), "w").close()
+            self.assertEqual(pkg.bump(out, step="minor"), (1, 2, 1))
+        finally:
+            pkg.read_versions = old_versions
+
+    def test_main_dry_run_minor(self):
+        """dry-run 只报版本号，不写版本号、不产 zip。"""
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = pkg.main(["--dry-run", "--minor", "--out", self.tmp])
+        self.assertEqual(rc, 0)
+        major, minor, _ = pkg.read_versions()
+        self.assertIn(f"forjiang-crypto-{major}.{minor + 1}.0.zip", buf.getvalue())
+        self.assertEqual([n for n in os.listdir(self.tmp)
+                          if n.startswith("forjiang-crypto-")], [])
 
     def test_launcher_names_detected(self):
         self.assertTrue(pkg.name_is_launcher("打开网页界面.command"))

@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,12 +62,22 @@ class WebUIBase(unittest.TestCase):
         cls.thread.start()
         time.sleep(0.2)
         cls.tmp = tempfile.mkdtemp(prefix="forjiang-webui-test-")
+        # 简版接口不传 outdir 时落到默认数据目录：测试必须把它指到临时目录，
+        # 否则往用户真实的 ~/forjiang-crypto 里塞一堆 a.txt / dup.txt。
+        cls.data_dir = os.path.join(cls.tmp, "data")
+        os.makedirs(cls.data_dir, exist_ok=True)
+        cls._saved_env = os.environ.get(webui_server.DATA_DIR_ENV)
+        os.environ[webui_server.DATA_DIR_ENV] = cls.data_dir
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
         cls.httpd.shutdown()
         cls.httpd.server_close()
+        if cls._saved_env is None:
+            os.environ.pop(webui_server.DATA_DIR_ENV, None)
+        else:
+            os.environ[webui_server.DATA_DIR_ENV] = cls._saved_env
 
     def conn(self):
         return http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)
@@ -463,7 +474,11 @@ class TestWebUI(WebUIBase):
         self.assertTrue(result["ok"], result)
         out = result["results"][0]["output"]
         self.assertTrue(out.endswith("简版测试.txt.forjiang"))
-        self.assertIn(cryptographic_magic("FJGPASS1"), open(out, "rb").read(8))
+        with open(out, "rb") as fh:
+            self.assertIn(cryptographic_magic("FJGPASS1"), fh.read(8))
+        # 不指定 outdir 时必须落在测试自带的临时数据目录，绝不碰用户的数据目录
+        self.assertTrue(os.path.abspath(out).startswith(os.path.abspath(self.data_dir)),
+                        out)
 
         # /api/download 只服务本次会话登记的产物
         c = self.conn()
@@ -481,10 +496,12 @@ class TestWebUI(WebUIBase):
         c.close()
         self.assertEqual(r.status, 404, "不得下发未登记的任意文件")
 
+        with open(out, "rb") as fh:
+            cipher = fh.read()
         status, result = self.post_files(
             "/api/simple/decrypt",
             {"password": "pw-123456"},
-            [("files", "简版测试.txt.forjiang", open(out, "rb").read())],
+            [("files", "简版测试.txt.forjiang", cipher)],
         )
         self.assertEqual(status, 200, result)
         restored = result["results"][0]["output"]
@@ -499,7 +516,8 @@ class TestWebUI(WebUIBase):
             [("files", "wp.bin", data)],
         )
         self.assertTrue(result["ok"], result)
-        ct = open(result["results"][0]["output"], "rb").read()
+        with open(result["results"][0]["output"], "rb") as fh:
+            ct = fh.read()
         status, result = self.post_files(
             "/api/simple/decrypt", {"password": "wrong-one"},
             [("files", "wp.bin.forjiang", ct)],
@@ -544,9 +562,13 @@ class TestWebUI(WebUIBase):
             outs[item["file"]] = item["output"]
 
         # 解密回来，逐个核对
+        cipher = {}
+        for n in payloads:
+            with open(outs[n], "rb") as fh:
+                cipher[n + ".forjiang"] = fh.read()
         status, result = self.post_files(
             "/api/simple/decrypt", {"password": "pw-123456"},
-            [("files", n + ".forjiang", open(outs[n], "rb").read()) for n in payloads],
+            [("files", n, d) for n, d in cipher.items()],
         )
         self.assertEqual(status, 200, result)
         self.assertTrue(result["ok"], result)
@@ -567,9 +589,12 @@ class TestWebUI(WebUIBase):
         self.assertEqual(len(set(outs)), 2, f"两个同名文件应产生两个不同产物: {outs}")
         self.assertTrue(all(os.path.isfile(p) for p in outs))
 
+        cipher = []
+        for p in outs:
+            with open(p, "rb") as fh:
+                cipher.append(("files", os.path.basename(p), fh.read()))
         status, result = self.post_files(
-            "/api/simple/decrypt", {"password": "pw-123456"},
-            [("files", os.path.basename(p), open(p, "rb").read()) for p in outs],
+            "/api/simple/decrypt", {"password": "pw-123456"}, cipher,
         )
         self.assertEqual(status, 200, result)
         restored = {}
@@ -838,6 +863,136 @@ class TestLaunchers(unittest.TestCase):
         """端口被自动换掉、服务已启动这些信息要立刻可见，不能被 stdout 缓冲吞掉。"""
         self.assertIn("-u -m webui", self.mac)
         self.assertIn("-u -m webui", self.win)
+
+
+class TestDefaultDataDir(unittest.TestCase):
+    """默认数据目录：简版没传 outdir 时的落点。
+
+    FORJIANG_CRYPTO_DATA_DIR 是测试和换盘场景的开关；没有它时才用
+    主目录下的 forjiang-crypto，不会把密钥和密文写进代码仓库。
+    """
+
+    def setUp(self):
+        self.saved = os.environ.get(webui_server.DATA_DIR_ENV)
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop(webui_server.DATA_DIR_ENV, None)
+        else:
+            os.environ[webui_server.DATA_DIR_ENV] = self.saved
+
+    def test_env_override_wins(self):
+        os.environ[webui_server.DATA_DIR_ENV] = "~/elsewhere-data"
+        self.assertEqual(webui_server._default_data_dir(),
+                         os.path.join(os.path.expanduser("~"), "elsewhere-data"))
+
+    def test_env_override_is_absolute_and_trimmed(self):
+        os.environ[webui_server.DATA_DIR_ENV] = "  /tmp/forjiang-alt  "
+        self.assertEqual(webui_server._default_data_dir(), "/tmp/forjiang-alt")
+
+    def test_without_env_falls_back_to_home_dir(self):
+        os.environ.pop(webui_server.DATA_DIR_ENV, None)
+        self.assertEqual(webui_server._default_data_dir(),
+                         os.path.join(os.path.expanduser("~"), "forjiang-crypto"))
+
+
+class TestNativePicker(unittest.TestCase):
+    """系统选择框的容错与诊断。
+
+    实测踩过的坑：既然 probe 失败被永久缓存，一旦某次探测失败，"浏览…"按钮就
+    再也回不来，而服务端只回一句"当前环境不支持系统选择框"——既不重试也不说
+    原因。这里把"失败只短期缓存 + 子进程 stderr 透传"锁住。
+    """
+
+    def setUp(self):
+        self.saved_cache = webui_server._CAN_PICK_CACHE
+
+    def tearDown(self):
+        webui_server._CAN_PICK_CACHE = self.saved_cache
+
+    @staticmethod
+    def fake_run(returncode=0, stdout=b"", stderr=b""):
+        """顶替 subprocess.run：返回一个带 call_count 的 Mock。"""
+        from types import SimpleNamespace
+
+        return unittest.mock.Mock(return_value=SimpleNamespace(
+            returncode=returncode, stdout=stdout, stderr=stderr))
+
+    def test_pick_returns_path(self):
+        with unittest.mock.patch("webui.server.subprocess.run",
+                                 self.fake_run(stdout=b"/tmp/out\n")):
+            path, error = webui_server._native_pick("dir")
+        self.assertEqual(path, "/tmp/out")
+        self.assertIsNone(error)
+
+    def test_pick_cancel_is_not_an_error(self):
+        """用户点取消：子进程正常退出但没输出，这不是故障。"""
+        with unittest.mock.patch("webui.server.subprocess.run", self.fake_run()):
+            path, error = webui_server._native_pick("dir")
+        self.assertIsNone(path)
+        self.assertIsNone(error)
+
+    def test_pick_failure_carries_child_stderr(self):
+        """子进程炸了要把它的 stderr 带出来，否则根本查不出原因。"""
+        with unittest.mock.patch(
+                "webui.server.subprocess.run",
+                self.fake_run(returncode=1, stderr=b"no display name and no $DISPLAY")):
+            path, error = webui_server._native_pick("file")
+        self.assertIsNone(path)
+        self.assertIn("no display name and no $DISPLAY", error)
+
+    def test_pick_failure_without_stderr_still_explains(self):
+        with unittest.mock.patch("webui.server.subprocess.run",
+                                 self.fake_run(returncode=-9)):
+            path, error = webui_server._native_pick("dir")
+        self.assertIsNone(path)
+        self.assertTrue(error and "退出码" in error, error)
+
+    def test_negative_probe_result_is_not_cached_forever(self):
+        """探测失败只短期缓存：到点重探，恢复了就要能用。"""
+        webui_server._CAN_PICK_CACHE = time.monotonic() - 1.0
+        with unittest.mock.patch("webui.server.subprocess.run",
+                                 self.fake_run(returncode=0)):
+            self.assertTrue(webui_server._native_picker_available())
+        self.assertIs(webui_server._CAN_PICK_CACHE, True)
+
+    def test_fresh_negative_probe_is_kept(self):
+        """刚失败过的短时间内不再探，避免每次请求都起一个子进程。"""
+        webui_server._CAN_PICK_CACHE = time.monotonic() + 999
+        with unittest.mock.patch("webui.server.subprocess.run",
+                                 self.fake_run(returncode=0)) as run:
+            self.assertFalse(webui_server._native_picker_available())
+            self.assertEqual(run.call_count, 0)
+
+    def test_positive_probe_result_is_cached(self):
+        webui_server._CAN_PICK_CACHE = True
+        with unittest.mock.patch("webui.server.subprocess.run",
+                                 self.fake_run(returncode=1)) as run:
+            self.assertTrue(webui_server._native_picker_available())
+            self.assertEqual(run.call_count, 0)
+
+    def test_pick_endpoint_reports_diagnostic(self):
+        """真起一个服务：pick 失败时 error 里要带上子进程原文。"""
+        httpd = make_server("127.0.0.1", 0)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with unittest.mock.patch(
+                    "webui.server.subprocess.run",
+                    self.fake_run(returncode=1, stderr=b"tkinter not available")):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+                c.request("POST", "/api/pick", body=json.dumps({"kind": "dir"}).encode(),
+                          headers={"Content-Type": "application/json"})
+                r = c.getresponse()
+                body = json.loads(r.read().decode())
+                c.close()
+            self.assertEqual(r.status, 501)
+            self.assertFalse(body["ok"])
+            self.assertIn("tkinter not available", body["error"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

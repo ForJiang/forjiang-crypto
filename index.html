@@ -165,12 +165,14 @@ const TAG_LEN = 16;                 // GCM tag
 const HEADER_SIZE = 8 + 1 + 1 + 4 + 1 + 2;   // 魔数+版本+kdf+迭代+盐长+名长 = 17
 const SUFFIX = ".forjiang";
 const MIN_PASSWORD = 6;
+const DOWNLOAD_GAP_MS = 350;        // 多个自动下载之间留间隔，否则浏览器会拦
 
 const WINDOWS_RESERVED = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3",
   "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3",
   "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
 
 const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- 字节小工具 ----
 function ascii(text) {
@@ -247,6 +249,7 @@ function setBar(bar, pct) {
 }
 
 // ---- 下载名：Windows 禁用的字符、控制字符、保留设备名、结尾点空格 ----
+// 只影响“落到磁盘的名字”，文件头里存的是忠实原名（与桌面版一致）。
 function safeDownloadName(name) {
   let n = String(name || "").replace(/\\/g, "/").split("/").pop() || "";
   n = n.replace(/[<>:"|?*\x00-\x1f\x7f]/g, "_").replace(/[. ]+$/, "");
@@ -265,6 +268,32 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// ---- 大文件流式写盘（File System Access API），不可用时回落 Blob 下载 ----
+// 没有它的话整份密文都得先攒在内存里，几个 G 的文件会把标签页直接撑爆。
+function fsSupported() {
+  return typeof window.showSaveFilePicker === "function";
+}
+async function openSaveSink(suggestedName) {
+  if (!fsSupported()) return null;
+  let handle;
+  try {
+    handle = await window.showSaveFilePicker({ suggestedName: suggestedName });
+  } catch (e) {
+    if (e && e.name === "AbortError") return { aborted: true };
+    return null;                      // 其它失败：安静回落到下载
+  }
+  try {
+    const w = await handle.createWritable();
+    return {
+      write: async (bytes) => { await w.write(bytes); },
+      close: async () => { await w.close(); },
+      abort: async () => { try { await w.abort(); } catch (e) { /* 已关闭就忽略 */ } },
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // ---- 加密原语 ----
 async function deriveKey(password, salt) {
   const material = await crypto.subtle.importKey(
@@ -275,24 +304,41 @@ async function deriveKey(password, salt) {
   return crypto.subtle.importKey("raw", bits, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
-// 分块读文件：优先 file.stream()，老浏览器退回 slice；内存里始终只有一个块
+// 分块读文件：优先 file.stream()，老浏览器退回 slice；内存里始终只有一个块。
+// 关键：file.stream() 每次吐多少字节由浏览器说了算（可能远超 1 MiB），必须重新
+// 切成定长块——否则密文块会超过桌面版允许的上限（CHUNK_SIZE + TAG_LEN），
+// 桌面版会以“块长度异常”拒解，浏览器加密的大文件在桌面版那儿打不开。
 async function* chunksOf(file) {
+  const limit = CHUNK_SIZE;
   if (typeof file.stream === "function") {
     const reader = file.stream().getReader();
+    const buf = new Uint8Array(limit);
+    let filled = 0;
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) return;
-        if (value && value.byteLength) {
-          yield value instanceof Uint8Array ? value : new Uint8Array(value);
+        if (done) break;
+        if (!value || !value.byteLength) continue;
+        const v = value instanceof Uint8Array ? value : new Uint8Array(value);
+        let off = 0;
+        while (off < v.byteLength) {
+          const n = Math.min(limit - filled, v.byteLength - off);
+          buf.set(v.subarray(off, off + n), filled);
+          filled += n;
+          off += n;
+          if (filled === limit) {
+            yield buf.subarray(0, limit);
+            filled = 0;
+          }
         }
       }
     } finally {
       try { reader.releaseLock(); } catch (e) { /* 流已关闭时也会抛，忽略 */ }
     }
+    if (filled) yield buf.subarray(0, filled);
   } else {
-    for (let off = 0; off < file.size; off += CHUNK_SIZE) {
-      const end = Math.min(off + CHUNK_SIZE, file.size);
+    for (let off = 0; off < file.size; off += limit) {
+      const end = Math.min(off + limit, file.size);
       yield new Uint8Array(await file.slice(off, end).arrayBuffer());
     }
   }
@@ -307,11 +353,13 @@ async function sealChunk(key, header, index, plaintext) {
   return concat(iv, u32be(ct.byteLength), ct);
 }
 
-async function encryptFile(file, password, onProgress) {
+// 逐块产出密文（含文件头与结束块），stats.plainSize 回传明文大小
+async function* encryptParts(file, password, stats, onProgress) {
   if (file.name.toLowerCase().endsWith(SUFFIX)) {
     throw new Error(file.name + " 已经是 .forjiang 加密文件");
   }
-  const nameBytes = new TextEncoder().encode(safeDownloadName(file.name));
+  // 文件头存忠实原名：跨平台/跨版本还原以它为准，落盘名才做平台清洗
+  const nameBytes = new TextEncoder().encode(file.name);
   if (nameBytes.byteLength > NAME_MAX) {
     throw new Error("文件名过长（" + nameBytes.byteLength + " 字节，上限 " + NAME_MAX + "）");
   }
@@ -321,20 +369,30 @@ async function encryptFile(file, password, onProgress) {
     ascii(MAGIC_TEXT), u8(FORMAT_VERSION), u8(KDF_PBKDF2), u32be(ITERATIONS),
     u8(SALT_LEN), u16be(nameBytes.byteLength), salt, nameBytes
   );
-  const parts = [header];
+  yield header;
   let index = 0, done = 0;
   for await (const chunk of chunksOf(file)) {
-    parts.push(await sealChunk(key, header, index++, chunk));
+    yield await sealChunk(key, header, index++, chunk);
     done += chunk.byteLength;
     if (onProgress) onProgress(done / file.size);
   }
   // 结束块：明文为空但带认证 tag，缺了它说明文件被截断
-  parts.push(await sealChunk(key, header, index, new Uint8Array(0)));
-  return { blob: new Blob(parts, { type: "application/octet-stream" }),
-           plainSize: done };
+  yield await sealChunk(key, header, index, new Uint8Array(0));
+  stats.plainSize = done;
 }
 
-async function decryptFile(file, password, onProgress) {
+async function encryptFile(file, password, onProgress) {
+  const stats = {};
+  const parts = [];
+  for await (const part of encryptParts(file, password, stats, onProgress)) {
+    parts.push(part);
+  }
+  return { blob: new Blob(parts, { type: "application/octet-stream" }),
+           plainSize: stats.plainSize || 0 };
+}
+
+// 解析密码模式文件头，返回盐、原名与数据区起始偏移（只读前几十字节）
+async function readPasswordHeader(file) {
   const prefix = new Uint8Array(await file.slice(0, HEADER_SIZE).arrayBuffer());
   if (prefix.byteLength < HEADER_SIZE) {
     throw new Error("文件不足一个文件头长度，不是有效的 .forjiang 文件");
@@ -343,6 +401,8 @@ async function decryptFile(file, password, onProgress) {
     throw new Error("不是本格式加密的文件（魔数 " +
                     bytesToText(prefix.subarray(0, 8)) + "）");
   }
+  // 布局：magic(8) version(1) kdf(1) iterations(4) salt_len(1) name_len(2) |
+  //       salt(salt_len) | name(name_len)。前 17 字节（含盐长与名长）一次读净。
   const pv = new DataView(prefix.buffer, prefix.byteOffset);
   const version = prefix[8], kdf = prefix[9];
   const iterations = pv.getUint32(10, false);
@@ -355,18 +415,23 @@ async function decryptFile(file, password, onProgress) {
   }
   if (saltLen !== SALT_LEN) throw new Error("盐长度异常：" + saltLen);
   if (nameLen > NAME_MAX) throw new Error("文件头中的文件名长度异常（" + nameLen + "）");
-
-  const rest = new Uint8Array(await file.slice(HEADER_SIZE, HEADER_SIZE + saltLen + nameLen).arrayBuffer());
+  const rest = new Uint8Array(
+    await file.slice(HEADER_SIZE, HEADER_SIZE + saltLen + nameLen).arrayBuffer());
   if (rest.byteLength < saltLen + nameLen) throw new Error("文件头被截断");
   const salt = rest.subarray(0, saltLen);
   const nameBytes = rest.subarray(saltLen, saltLen + nameLen);
-  const headerBytes = concat(prefix, rest);
-  const originalName = new TextDecoder().decode(nameBytes) || "decrypted.bin";
+  return {
+    salt: salt,
+    name: new TextDecoder().decode(nameBytes) || "decrypted.bin",
+    headerBytes: concat(prefix, rest),
+    dataStart: HEADER_SIZE + saltLen + nameLen,
+  };
+}
 
-  const key = await deriveKey(password, salt);
-  let pos = HEADER_SIZE + saltLen + nameLen;
-  let index = 0, done = 0, sawTerminator = false;
-  const parts = [];
+// 逐块产出明文；head 由 readPasswordHeader 事先解析，stats 回传原名与明文大小
+async function* decryptParts(file, password, head, stats, onProgress) {
+  const key = await deriveKey(password, head.salt);
+  let pos = head.dataStart, index = 0, done = 0, sawTerminator = false;
   while (true) {
     const chunkHead = new Uint8Array(
       await file.slice(pos, pos + NONCE_LEN + 4).arrayBuffer());
@@ -382,7 +447,7 @@ async function decryptFile(file, password, onProgress) {
     let plain;
     try {
       plain = new Uint8Array(await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: iv, additionalData: concat(headerBytes, u64be(index)),
+        { name: "AES-GCM", iv: iv, additionalData: concat(head.headerBytes, u64be(index)),
           tagLength: 128 },
         key, ct));
     } catch (e) {
@@ -391,13 +456,24 @@ async function decryptFile(file, password, onProgress) {
     index++;
     pos = start + ctLen;
     if (ctLen === TAG_LEN) { sawTerminator = true; break; }   // 结束块
-    parts.push(plain);
+    yield plain;
     done += plain.byteLength;
-    if (onProgress) onProgress(done / file.size);
+    if (onProgress) onProgress(done / Math.max(file.size, 1));
   }
   if (!sawTerminator) throw new Error("文件缺少结束块，可能被截断");
+  stats.name = safeDownloadName(head.name);
+  stats.plainSize = done;
+}
+
+async function decryptFile(file, password, onProgress) {
+  const head = await readPasswordHeader(file);
+  const stats = {};
+  const parts = [];
+  for await (const part of decryptParts(file, password, head, stats, onProgress)) {
+    parts.push(part);
+  }
   return { blob: new Blob(parts, { type: "application/octet-stream" }),
-           plainSize: done, name: safeDownloadName(originalName) };
+           plainSize: stats.plainSize || 0, name: stats.name || "decrypted.bin" };
 }
 
 // ---- 界面逻辑 ----
@@ -427,21 +503,46 @@ $("encBtn").onclick = async () => {
   btn.disabled = true;
   log.__lines = [];
   let ok = 0;
-  for (const file of files) {
-    try {
-      const r = await encryptFile(file, p1, (p) => setBar(bar, Math.round(p * 100)));
-      const outName = safeDownloadName(file.name) + SUFFIX;
-      downloadBlob(r.blob, outName);
-      ok++;
-      say(log, "[成功] " + file.name + " -> " + outName +
-          "（" + fmtBytes(r.plainSize) + " -> " + fmtBytes(r.blob.size) + "）");
-    } catch (e) {
-      say(log, "[失败] " + file.name + "：" + (e.message || e));
+  // 只选了一个文件时，先问保存位置，之后边加密边写盘（大文件不再整体驻留内存）
+  let sink = null;
+  if (files.length === 1) {
+    sink = await openSaveSink(safeDownloadName(files[0].name) + SUFFIX);
+    if (sink && sink.aborted) { btn.disabled = false; return; }
+  }
+  try {
+    for (const file of files) {
+      try {
+        if (sink) {
+          const stats = {};
+          for await (const part of encryptParts(file, p1, stats,
+                                                (p) => setBar(bar, Math.round(p * 100)))) {
+            await sink.write(part);
+          }
+          await sink.close();
+          sink = null;
+          ok++;
+          say(log, "[成功] " + file.name + " -> " +
+              safeDownloadName(file.name) + SUFFIX + "（" +
+              fmtBytes(stats.plainSize || 0) + "，已保存到所选位置）");
+        } else {
+          const r = await encryptFile(file, p1,
+                                      (p) => setBar(bar, Math.round(p * 100)));
+          downloadBlob(r.blob, safeDownloadName(file.name) + SUFFIX);
+          ok++;
+          say(log, "[成功] " + file.name + " -> " + safeDownloadName(file.name) + SUFFIX +
+              "（" + fmtBytes(r.plainSize) + " -> " + fmtBytes(r.blob.size) + "）");
+          await sleep(DOWNLOAD_GAP_MS);      // 多个自动下载之间留间隔
+        }
+      } catch (e) {
+        say(log, "[失败] " + file.name + "：" + (e.message || e));
+      }
     }
+  } finally {
+    if (sink) await sink.abort();
   }
   bar.classList.remove("on");
   say(log, "完成 " + ok + "/" + files.length + " 个文件", ok ? "ok" : "err");
-  if (ok) {
+  if (ok && !fsSupported()) {
     say(log, "浏览器可能拦截多个下载，若只收到一个请允许本站多次下载。");
   }
   btn.disabled = false;
@@ -460,26 +561,51 @@ $("decBtn").onclick = async () => {
   btn.disabled = true;
   log.__lines = [];
   let ok = 0;
-  for (const file of files) {
-    try {
-      if (!file.name.toLowerCase().endsWith(SUFFIX)) {
-        throw new Error("不是 .forjiang 文件");
+  let sink = null;
+  try {
+    for (const file of files) {
+      try {
+        if (!file.name.toLowerCase().endsWith(SUFFIX)) {
+          throw new Error("不是 .forjiang 文件");
+        }
+        const head = await readPasswordHeader(file);
+        const outName = safeDownloadName(head.name);
+        // 单文件才问保存位置：先拿到原名当默认文件名，再边解密边写盘
+        if (files.length === 1 && !sink) {
+          sink = await openSaveSink(outName);
+          if (sink && sink.aborted) { btn.disabled = false; return; }
+        }
+        if (sink) {
+          const stats = {};
+          for await (const part of decryptParts(file, p1, head, stats,
+                                                (p) => setBar(bar, Math.round(p * 90)))) {
+            await sink.write(part);
+          }
+          await sink.close();
+          sink = null;
+          ok++;
+          say(log, "[成功] " + file.name + " -> " + outName +
+              "（" + fmtBytes(stats.plainSize || 0) + "，已保存到所选位置）");
+          continue;
+        }
+        const r = await decryptFile(file, p1, (p) => setBar(bar, Math.round(p * 80 + 10)));
+        downloadBlob(r.blob, r.name);
+        ok++;
+        say(log, "[成功] " + file.name + " -> " + r.name +
+            "（" + fmtBytes(r.plainSize) + "）");
+        await sleep(DOWNLOAD_GAP_MS);
+      } catch (e) {
+        say(log, "[失败] " + file.name + "：" + (e.message || e));
       }
-      const r = await decryptFile(file, p1, (p) => setBar(bar, Math.round(p * 80 + 10)));
-      downloadBlob(r.blob, r.name);
-      ok++;
-      say(log, "[成功] " + file.name + " -> " + r.name + "（" + fmtBytes(r.plainSize) + "）");
-    } catch (e) {
-      say(log, "[失败] " + file.name + "：" + (e.message || e));
     }
+  } finally {
+    if (sink) await sink.abort();
   }
   bar.classList.remove("on");
   say(log, "完成 " + ok + "/" + files.length + " 个文件", ok ? "ok" : "err");
   if (ok) {
-    say(log, "解密出的文件已按原文件名下载，注意别覆盖本机上的同名文件。");
+    say(log, "解密出的文件已按原文件名恢复，注意别覆盖本机上的同名文件。");
   }
   btn.disabled = false;
 };
 </script>
-</body>
-</html>

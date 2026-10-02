@@ -52,7 +52,7 @@ from .codec import (
     txt_name,
 )
 
-__version__ = "1.1.2"
+__version__ = "1.2.0"
 
 __all__ = [
     "CHUNK_SIZE",

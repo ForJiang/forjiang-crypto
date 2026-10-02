@@ -597,5 +597,89 @@ class TestNameCompatibility(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestChunkBoundaryInterop(unittest.TestCase):
+    """密文块的尺寸上限：跨端互通的硬规矩。
+
+    实测踩坑：部署在 GitHub Pages 的网页版用 file.stream() 读文件，浏览器每次
+    吐多少字节由它说了算（可能一次吐出好几 MiB），网页直接把这个"大块"封成密文块。
+    桌面版收到 ct_len 超过 CHUNK_SIZE + TAG_LEN 的块时以"块长度异常"拒解，
+    于是网页加密的大文件拿到桌面版上谁都解不开。两端都必须按定长 CHUNK_SIZE 切块。
+    这里手搓一个超大块的密文，确认桌面版会当场拒解而不是把整块读进内存。
+    """
+
+    PASSWORD = "interop-1234"
+
+    def build_over_chunk_file(self, path, plaintext):
+        """按密码模式格式手写密文，但第一个数据块的明文就是 plaintext 整个。"""
+        from forjiang_crypto.codec import (
+            FORMAT_VERSION,
+            NONCE_LEN,
+            PASSWORD_KDF_PBKDF2,
+            PASSWORD_MAGIC,
+            PASSWORD_SALT_LEN,
+            _derive_key,
+            _PASSWORD_PREFIX,
+            _SALT_AND_NAME,
+        )
+        name_bytes = b"big.bin"
+        salt = b"\x0f" * PASSWORD_SALT_LEN
+        iterations = 1000  # 只求格式对，不求慢
+        header = (
+            _PASSWORD_PREFIX.pack(PASSWORD_MAGIC, FORMAT_VERSION,
+                                  PASSWORD_KDF_PBKDF2, iterations)
+            + _SALT_AND_NAME.pack(len(salt), len(name_bytes))
+            + salt
+            + name_bytes
+        )
+        key = _derive_key(self.PASSWORD, salt, iterations)
+
+        def seal(index, data):
+            import struct
+
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+            iv = b"\x11" * NONCE_LEN
+            enc = Cipher(algorithms.AES(key), modes.GCM(iv)).encryptor()
+            enc.authenticate_additional_data(header + struct.pack("!Q", index))
+            ct = enc.update(data) + enc.finalize() + enc.tag
+            return iv + struct.pack("!I", len(ct)) + ct
+
+        with open(path, "wb") as fh:
+            fh.write(header)
+            fh.write(seal(0, plaintext))     # 整个明文当成一个块，就像没切块的流
+            fh.write(seal(1, b""))
+        return path
+
+    def test_over_chunk_file_is_rejected_not_buffered(self):
+        tmp = tempfile.mkdtemp(prefix="forjiang-chunk-")
+        try:
+            src = self.build_over_chunk_file(os.path.join(tmp, "big.forjiang"),
+                                            b"x" * (CHUNK_SIZE * 2 + 5))
+            with self.assertRaises(HeaderError) as ctx:
+                password_decrypt_file(src, os.path.join(tmp, "out.bin"), self.PASSWORD)
+            self.assertIn("块长度异常", str(ctx.exception))
+            # 拒解时不能留下半截产物
+            self.assertFalse(os.path.exists(os.path.join(tmp, "out.bin")))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_multi_chunk_file_roundtrips(self):
+        """对齐的定长多块必须能原样解开——这是网页版切块修复后要保住的性质。"""
+        tmp = tempfile.mkdtemp(prefix="forjiang-chunk-")
+        try:
+            src = os.path.join(tmp, "plain.bin")
+            data = bytes((i * 31 + (i >> 7)) & 0xff for i in range(CHUNK_SIZE * 2 + 99))
+            with open(src, "wb") as fh:
+                fh.write(data)
+            enc = os.path.join(tmp, "plain.bin.forjiang")
+            password_encrypt_file(src, enc, self.PASSWORD)
+            out = os.path.join(tmp, "restored.bin")
+            password_decrypt_file(enc, out, self.PASSWORD)
+            with open(out, "rb") as fh:
+                self.assertEqual(fh.read(), data)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
