@@ -10,6 +10,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+
 from forjiang_crypto import (  # noqa: E402
     CHUNK_SIZE,
     SUFFIX,
@@ -385,6 +387,83 @@ class TestPasswordMode(Base):
         src = self.write("short.txt", b"abc")
         with self.assertRaises(ValueError):
             password_encrypt_file(src, self.path("short.txt.forjiang"), "")
+
+
+class TestEncryptFailureCleanup(unittest.TestCase):
+    """加密失败不能把 .txt 中转件留在输出目录里。"""
+
+    def test_failed_encrypt_removes_txt_intermediate(self):
+        tmp = tempfile.mkdtemp(prefix="forjiang-clean-")
+        try:
+            src = os.path.join(tmp, "report.png")
+            with open(src, "wb") as fh:
+                fh.write(b"payload")
+            out = os.path.join(tmp, "vault")
+            os.makedirs(out)
+            pub = load_public_key(self._pub(tmp))
+            # 传一个坏公钥对象：.txt 中转件已经落盘，随后的 wrap_key 必失败
+            with self.assertRaises(Exception):
+                encrypt_uploaded(src, out, "not-a-key", force=True)
+            self.assertFalse(
+                os.path.exists(os.path.join(out, "report.png.txt")),
+                "加密失败后 .txt 中转件必须被清掉")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _pub(self, tmp):
+        save_keypair(generate_keypair(2048), tmp, "k")
+        return os.path.join(tmp, "k.pub.pem")
+
+
+class TestOpenSSHPrivateKey(unittest.TestCase):
+    """OpenSSH 格式私钥（ssh-keygen 默认产出的那种）要能直接用。"""
+
+    def test_load_openssh_private_key(self):
+        from forjiang_crypto.keys import load_private_key as load
+        tmp = tempfile.mkdtemp(prefix="forjiang-ssh-")
+        try:
+            kp = generate_keypair(2048)
+            pem = kp.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.OpenSSH,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+            path = os.path.join(tmp, "id_rsa")
+            with open(path, "wb") as fh:
+                fh.write(pem)
+            key = load(path)
+            self.assertEqual(key.key_size, 2048)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_encrypted_openssh_private_key_needs_password(self):
+        from forjiang_crypto.exceptions import KeyPasswordRequired
+        from forjiang_crypto.keys import load_private_key as load
+        try:
+            # cryptography 加密 OpenSSH 私钥需要 bcrypt 模块，没有就跳过
+            generate_keypair(2048).private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.OpenSSH,
+                encryption_algorithm=serialization.BestAvailableEncryption(b"x"))
+        except Exception as exc:
+            self.skipTest(f"本环境不支持加密 OpenSSH 序列化: {exc}")
+        tmp = tempfile.mkdtemp(prefix="forjiang-ssh2-")
+        try:
+            kp = generate_keypair(2048)
+            pem = kp.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.OpenSSH,
+                encryption_algorithm=serialization.BestAvailableEncryption(b"pw-123456"),
+            )
+            path = os.path.join(tmp, "id_rsa")
+            with open(path, "wb") as fh:
+                fh.write(pem)
+            with self.assertRaises(KeyPasswordRequired):
+                load(path)
+            key = load(path, password="pw-123456")
+            self.assertEqual(key.key_size, 2048)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestNameCompatibility(unittest.TestCase):

@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -690,6 +691,84 @@ class TestWebUI(WebUIBase):
         status, result = self.post_files("/api/encrypt", {"pub": "x"}, [])
         self.assertEqual(status, 400)
         self.assertIn("files", result["error"])
+
+    def test_long_filename_upload_does_not_break_request(self):
+        """超长/带 Windows 非法字符的上传名不该让整个请求 500。
+
+        实测踩坑：上传临时名直接用 basename 拼，遇到 300 字符的名字会
+        ENAMETOOLONG，整批一起失败。
+        """
+        long_name = "L" * 300 + ".bin"
+        colon_name = 'bad:name*.bin'
+        status, result = self.post_files(
+            "/api/simple/encrypt",
+            {"password": "pw-123456", "outdir": self.tmp},
+            [("files", long_name, b"long name payload"),
+             ("files", colon_name, b"colon name payload")],
+        )
+        self.assertEqual(status, 200, result)
+        oks = [r for r in result["results"] if r["ok"]]
+        self.assertEqual(len(oks), 2, result)
+        for r in oks:
+            self.assertTrue(os.path.exists(r["output"]), r)
+            os.unlink(r["output"])
+
+    def test_short_password_rejected_on_encrypt_only(self):
+        """加密要 6 位下限，解密不设限（CLI/浏览器版都没有下限）。"""
+        status, result = self.post_files(
+            "/api/simple/encrypt",
+            {"password": "12345", "outdir": self.tmp},
+            [("files", "short.bin", b"abc")],
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("密码至少", result["error"])
+
+        # 用库直接造一个短口令密文（库接口和 CLI 一样不限制长度），
+        # 解密接口必须允许尝试并且能解开
+        from forjiang_crypto.codec import password_encrypt_file
+        src = self.write_src()
+        cipher = self.path("short-pw.bin.forjiang")
+        password_encrypt_file(src, cipher, "12345")
+        with open(cipher, "rb") as fh:
+            blob = fh.read()
+        out = self.path("short-out")
+        status, result = self.post_files(
+            "/api/simple/decrypt",
+            {"password": "12345", "outdir": out},
+            [("files", "short-pw.bin.forjiang", blob)],
+        )
+        self.assertEqual(status, 200, result)
+        self.assertTrue(any(r["ok"] for r in result["results"]), result)
+        self.assertTrue(os.path.exists(self.path("short-out", "plain-src.bin")))
+
+    def write_src(self):
+        p = self.path("plain-src.bin")
+        with open(p, "wb") as fh:
+            fh.write(b"short password file")
+        return p
+
+    def test_folder_mode_zip_is_unique(self):
+        """连续两次文件夹模式：后一次的 zip 不能覆盖前一次的。"""
+        folder = self.path("zdir")
+        os.makedirs(folder)
+        with open(self.path("zdir", "a.txt"), "wb") as fh:
+            fh.write(b"a")
+        with open(self.path("zdir", "b.txt"), "wb") as fh:
+            fh.write(b"b")
+        zips = []
+        for _ in range(2):
+            status, result = self.post_json(
+                "/api/simple/encrypt",
+                {"password": "pw-123456", "outdir": self.path("zout"), "folder": folder},
+            )
+            self.assertEqual(status, 200, result)
+            self.assertIn("zip", result)
+            zips.append(result["zip"])
+        self.assertNotEqual(zips[0], zips[1])
+        for z in zips:
+            self.assertTrue(os.path.exists(z), z)
+            with zipfile.ZipFile(z) as zf:
+                self.assertEqual(len(zf.namelist()), 2, zf.namelist())
 
 
 class TestLaunchers(unittest.TestCase):

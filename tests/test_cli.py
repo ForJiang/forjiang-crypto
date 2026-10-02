@@ -86,7 +86,76 @@ class TestCli(unittest.TestCase):
         r = run("decrypt", junk, "--priv", self.path("keys4", "forjiang.priv.pem"))
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("魔数不匹配", r.stderr)
+        # 不认识的文件要直说“不是本系统加密的文件”，别误报成“这是公钥模式加密的
+        # 文件，请用 --priv 解密”（早期 bug：is_password_format 读失败返回 False，
+        # 文件不存在也被归到公钥分支）
+        self.assertIn("不是本系统加密的文件", r.stderr)
+        self.assertIn("魔数", r.stderr)
+
+    def test_decrypt_missing_file_clear_error(self):
+        """文件不存在时不能误报“这是公钥模式加密的文件”。"""
+        r = run("decrypt", self.path("nope.forjiang"), "--content-password", "pw-123456")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("读取失败", r.stderr)
+        self.assertNotIn("这是公钥模式", r.stderr)
+
+    def test_password_mode_targets_new_directory(self):
+        """密码模式 --out 指向不存在的目录时必须自动创建（早期只公钥模式会建）。"""
+        src = self.path("pw-a.txt")
+        with open(src, "wb") as fh:
+            fh.write(b"password mode payload")
+        vault = self.path("pw-newdir")
+        r = run("encrypt", src, "--content-password", "pw-123456",
+                "--out", vault, "--quiet")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.isdir(vault))
+        back = self.path("pw-back")
+        r2 = run("decrypt", vault, "--content-password", "pw-123456",
+                 "--out", back, "--quiet")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        with open(self.path("pw-back", "pw-a.txt"), "rb") as fh:
+            self.assertEqual(fh.read(), b"password mode payload")
+
+    def test_password_mode_public_mode_mixed_batch(self):
+        """一个目录里两种格式混放，各用各的凭证都能解，失败项单独报告。"""
+        up = self.path("mix-up")
+        os.makedirs(up)
+        with open(self.path("mix-up", "p.txt"), "wb") as fh:
+            fh.write(b"by password")
+        with open(self.path("mix-up", "k.txt"), "wb") as fh:
+            fh.write(b"by public key")
+        kdir = self.path("mix-keys")
+        run("keygen", "--out", kdir)
+        run("encrypt", self.path("mix-up", "p.txt"), "--content-password", "pw-123456",
+            "--out", up, "--quiet")
+        run("encrypt", self.path("mix-up", "k.txt"),
+            "--pub", self.path("mix-keys", "forjiang.pub.pem"), "--out", up, "--quiet")
+        # 只给内容密码：密码模式成功，公钥模式单独报失败
+        out = self.path("mix-out-pw")
+        r = run("decrypt", up, "--content-password", "pw-123456", "--out", out, "--quiet")
+        self.assertEqual(r.returncode, 1)  # 有一个失败项
+        self.assertIn("p.txt", os.listdir(out))
+        self.assertIn("这是公钥模式加密的文件，请用 --priv 提供私钥", r.stderr)
+        # 两个凭证都给：两个都成功
+        out2 = self.path("mix-out-both")
+        r2 = run("decrypt", up, "--content-password", "pw-123456",
+                 "--priv", self.path("mix-keys", "forjiang.priv.pem"),
+                 "--out", out2, "--quiet")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("p.txt", os.listdir(out2))
+        self.assertIn("k.txt", os.listdir(out2))
+
+    def test_password_mode_short_password_allowed_on_decrypt(self):
+        """CLI 对内容密码没有最短长度限制，网页版那套 6 位下限不该拦在这儿。"""
+        src = self.path("short-pw.txt")
+        with open(src, "wb") as fh:
+            fh.write(b"tiny")
+        run("encrypt", src, "--content-password", "12345",
+            "--out", self.path("sp-vault"), "--quiet")
+        back = self.path("sp-back")
+        r = run("decrypt", self.path("sp-vault"), "--content-password", "12345",
+                "--out", back, "--quiet")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_encrypt_duplicate_then_force(self):
         uploads = self.path("up2")

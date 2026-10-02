@@ -437,7 +437,15 @@ def encrypt_uploaded(input_path, out_dir, public_key, keep_txt=False, force=Fals
         with open(input_path, "rb") as src, open(txt_path, "wb") as dst:
             shutil.copyfileobj(src, dst, CHUNK_SIZE)
 
-    result = encrypt_file(txt_path, for_path, public_key, origin=base, progress=progress)
+    try:
+        result = encrypt_file(txt_path, for_path, public_key, origin=base,
+                              progress=progress)
+    except Exception:
+        # 加密失败不能在中转件上留垃圾：.txt 是中间产物，密文没出来就该清掉
+        if not txt_is_input:
+            with contextlib.suppress(OSError):
+                os.unlink(txt_path)
+        raise
     result.txt_path = txt_path
     if not keep_txt and not txt_is_input:
         try:

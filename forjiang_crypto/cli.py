@@ -7,7 +7,10 @@ import sys
 
 from . import __version__
 from .codec import (
+    MAGIC,
+    PASSWORD_MAGIC,
     SUFFIX,
+    _disk_name,
     _sanitize_name,
     decrypt_forjiang,
     encrypt_uploaded,
@@ -28,6 +31,27 @@ from .keys import (
     load_public_key,
     save_keypair,
 )
+
+
+def _sniff_mode(path):
+    """按文件头魔数判断加解密模式，读不了或两种魔数都不是时给出能照着做的报错。
+
+    不能只靠 is_password_format：它在文件不存在/读不了时返回 False，
+    会让“文件不存在”被误报成“这是公钥模式加密的文件，请用 --priv 解密”。
+    """
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(len(PASSWORD_MAGIC))
+    except OSError as exc:
+        raise HeaderError(f"读取失败：{path}: {exc}") from exc
+    if magic == PASSWORD_MAGIC:
+        return "password"
+    if magic == MAGIC:
+        return "public"
+    raise HeaderError(
+        f"不是本系统加密的文件（{path} 开头的魔数是 {magic!r}）；"
+        f"公钥模式应为 {MAGIC!r}，密码模式应为 {PASSWORD_MAGIC!r}"
+    )
 
 
 def _human(n):
@@ -69,8 +93,13 @@ def _collect(paths, recursive):
             else:
                 for name in sorted(os.listdir(p)):
                     fp = os.path.join(p, name)
-                    if os.path.isfile(fp) and not name.endswith(SUFFIX):
-                        files.append(fp)
+                    if not os.path.isfile(fp):
+                        continue
+                    if name.endswith(SUFFIX):
+                        continue
+                    if name.startswith(".forjiang-"):
+                        continue
+                    files.append(fp)
         else:
             files.append(p)
     return files
@@ -124,6 +153,9 @@ def cmd_encrypt(args):
         print("没有待加密的文件。", file=sys.stderr)
         return 1
     out_dir = args.out or os.path.dirname(os.path.abspath(files[0]))
+    # 公钥模式的 encrypt_uploaded 自己会建目录，密码模式不会：统一在这里建，
+    # 否则 --out 指向的新目录会以 "No such file or directory" 失败。
+    os.makedirs(out_dir, exist_ok=True)
     failures = 0
     for path in files:
         try:
@@ -131,7 +163,9 @@ def cmd_encrypt(args):
                 base = os.path.basename(path)
                 if base.endswith(SUFFIX):
                     raise HeaderError(f"{base} 已经是 .forjiang 加密文件")
-                out_path = os.path.join(out_dir, strip_forjiang(base) + SUFFIX)
+                # 落盘名按当前平台清洗：Windows 上带 : * ? 的名字、超长名都会写失败
+                out_path = os.path.join(
+                    out_dir, _disk_name(base, out_dir, len(SUFFIX)) + SUFFIX)
                 if os.path.exists(out_path) and not args.force:
                     raise FileExistsError(f"输出已存在: {out_path} (--force 可覆盖)")
                 result = password_encrypt_file(
@@ -207,21 +241,29 @@ def cmd_decrypt(args):
         print("没有待解密的 .forjiang 文件。", file=sys.stderr)
         return 1
     out_dir = args.out or os.path.dirname(os.path.abspath(files[0]))
+    # 公钥模式的 decrypt_forjiang 自己会建目录，密码模式不会：统一在这里建
+    os.makedirs(out_dir, exist_ok=True)
     failures = 0
     for path in files:
         try:
-            if is_password_format(path):
+            mode = _sniff_mode(path)
+            if mode == "password":
                 if not password:
-                    raise HeaderError("这是密码模式加密的文件，请用 --password 解密")
-                staging = os.path.join(out_dir, ".forjiang-staging-" + os.path.basename(path))
-                try:
-                    r = password_decrypt_file(
-                        path, staging, password,
-                        progress=None if args.quiet else _progress_printer(os.path.basename(path)),
-                    )
-                finally:
-                    pass
-                restored = os.path.join(out_dir, _sanitize_name(r.origin or strip_forjiang(path)))
+                    raise HeaderError(
+                        "这是密码模式加密的文件，请用 --content-password 提供内容密码")
+                # 中转件名按当前平台清洗：密文名里若带 : * ? 或过长，写盘会失败
+                staging = os.path.join(
+                    out_dir, ".forjiang-staging-" + _disk_name(os.path.basename(path),
+                                                              out_dir, 0))
+                r = password_decrypt_file(
+                    path, staging, password,
+                    progress=None if args.quiet else _progress_printer(os.path.basename(path)),
+                )
+                # 还原名同样要能写盘：文件头可能是另一台机器写的，名字带 : * ?
+                restored = os.path.join(
+                    out_dir,
+                    _disk_name(_sanitize_name(r.origin or strip_forjiang(path)), out_dir),
+                )
                 if os.path.exists(restored) and not args.force:
                     os.unlink(staging)
                     raise FileExistsError(f"输出已存在: {restored} (--force 可覆盖)")
@@ -229,7 +271,7 @@ def cmd_decrypt(args):
                 result_output = restored
             else:
                 if priv is None:
-                    raise HeaderError("这是公钥模式加密的文件，请用 --priv 解密")
+                    raise HeaderError("这是公钥模式加密的文件，请用 --priv 提供私钥")
                 result = decrypt_forjiang(
                     path,
                     out_dir,
@@ -250,8 +292,7 @@ def cmd_decrypt(args):
             print(f"失败：{path}: {exc}", file=sys.stderr)
             failures += 1
             continue
-        mode = "密码模式" if is_password_format(path) else "公钥模式"
-        print(f"解密[{mode}] {path} -> {result_output}")
+        print(f"解密[{'密码模式' if mode == 'password' else '公钥模式'}] {path} -> {result_output}")
     if failures:
         print(f"{failures} 个文件未处理。", file=sys.stderr)
         return 1

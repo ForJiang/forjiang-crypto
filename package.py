@@ -24,7 +24,8 @@ NAME = "forjiang-crypto"
 PYPROJECT = os.path.join(ROOT, "pyproject.toml")
 INIT_PY = os.path.join(ROOT, "forjiang_crypto", "__init__.py")
 
-EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache"}
+EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".venv", "venv",
+                "node_modules", "dist", "build", ".mypy_cache"}
 EXCLUDE_SUFFIX = (".pyc", ".pyo", ".zip")
 EXCLUDE_NAMES = {".DS_Store"}
 

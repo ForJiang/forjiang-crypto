@@ -5,7 +5,9 @@
 或在 keygen 时加 --password 落盘为加密私钥。
 """
 
+import contextlib
 import os
+import tempfile
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -88,7 +90,7 @@ def load_public_key(path):
 
 
 def load_private_key(path, password=None):
-    """从 PEM/DER 文件加载私钥。
+    """从 PEM/DER/OpenSSH 文件加载私钥。
 
     加密私钥必须提供 password（未提供时会得到“需要口令”的报错）；
     未加密私钥给了 password 会被忽略。
@@ -99,7 +101,9 @@ def load_private_key(path, password=None):
 
     key = None
     last_error = None
-    for loader in (serialization.load_pem_private_key, serialization.load_der_private_key):
+    for loader in (serialization.load_pem_private_key,
+                   serialization.load_ssh_private_key,
+                   serialization.load_der_private_key):
         try:
             key = loader(data, password=password)
             break
@@ -160,14 +164,32 @@ def _read(path, is_public):
         raise KeyError_(f"{kind}文件不存在：{path}") from None
 
 
-def _write_private(path, data, mode):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+def _write_key(path, data, mode):
+    """原子地写出一个密钥文件，并按传入 mode 设定权限。
+
+    先建同权限的隐藏临时文件再 os.replace，避免“先 0644 再 chmod”的窗口；
+    用文件对象写而不是单次 os.write，后者在数据量大时可能短写。
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".forjiang-key-", dir=directory)
     try:
-        os.write(fd, data)
-    finally:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb", closefd=False) as fh:
+            fh.write(data)
+            fh.flush()
+        os.fsync(fd)
         os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     # umask 可能把权限收得更紧，按传入 mode 校准一次
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(path, mode)
-    except OSError:
-        pass
+
+
+def _write_private(path, data, mode):
+    _write_key(path, data, mode)

@@ -37,6 +37,7 @@ from forjiang_crypto import (  # noqa: E402
     save_keypair,
 )
 from forjiang_crypto.codec import (  # noqa: E402
+    _disk_name,
     _sanitize_name,
     decrypt_forjiang,
     encrypt_uploaded,
@@ -71,6 +72,17 @@ def _quote(name):
     from urllib.parse import quote
 
     return quote(name)
+
+
+def _unique_suffix():
+    """本次请求内的唯一后缀：并发请求不能共用一个中转文件名。
+
+    服务是 ThreadingHTTPServer，两个下载/解密请求同时落到同一个 out_dir 时，
+    固定的 "staging.out" / "folderenc-forjiang.zip" 会互相覆盖或直接失败。
+    """
+    import uuid
+
+    return uuid.uuid4().hex[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +179,12 @@ def extract_multipart(body_path, content_type, tmpdir):
             if filename is not None:
                 if not name:
                     name = "file"
-                path = os.path.join(tmpdir, f"upload-{index:04d}-{os.path.basename(filename)}")
+                # 落盘名只用 basename 并按平台裁剪（把 upload-NNNN- 前缀也算进
+                # 长度预算）：浏览器可能送来带 : * ? 的名字或超长名字，
+                # 直接用会让整个请求 500
+                safe = _disk_name(os.path.basename(filename) or "upload",
+                                  tmpdir, len(f"upload-{index:04d}-"))
+                path = os.path.join(tmpdir, f"upload-{index:04d}-{safe}")
                 index += 1
                 _copy_range(fh, path, body_start, delim_pos)
                 files.setdefault(name, []).append((filename, path))
@@ -355,8 +372,6 @@ class Handler(BaseHTTPRequestHandler):
         password = fields.get("password") or ""
         if not password:
             raise ValueError("请输入密码")
-        if len(password) < PASSWORD_MIN_LEN:
-            raise ValueError(f"密码至少 {PASSWORD_MIN_LEN} 位")
         if not uploads and not folder:
             raise ValueError("请选择文件（可多选）或选择一个文件夹")
         if uploads and folder:
@@ -365,6 +380,10 @@ class Handler(BaseHTTPRequestHandler):
         out_dir = (fields.get("outdir") or "").strip() or _default_data_dir()
         os.makedirs(out_dir, exist_ok=True)
         encrypting = path.endswith("/encrypt")
+        # 只在加密时要求口令长度：decrypt 的口令可能本来就短（CLI 与浏览器版都不
+        # 设下限），短口令交给认证结果说话，别在入口就拒绝。
+        if encrypting and len(password) < PASSWORD_MIN_LEN:
+            raise ValueError(f"密码至少 {PASSWORD_MIN_LEN} 位")
 
         # 统一成 (显示名, 源路径) 列表
         jobs = []
@@ -385,6 +404,7 @@ class Handler(BaseHTTPRequestHandler):
         ok_count = 0
         seen_names = {}   # 同一批里的名字 -> 出现次数，重名加后缀防覆盖
         outputs = []
+        token = _unique_suffix()   # 本次请求专属，避免并发请求互相覆盖中转件
         for display, src in jobs:
             base = os.path.basename(display)
             entry = {"file": display}
@@ -394,16 +414,21 @@ class Handler(BaseHTTPRequestHandler):
                 if encrypting:
                     if base.endswith(SUFFIX):
                         raise ValueError(f"{base} 已经是 .forjiang 加密文件")
-                    stem = _unique_name(strip_forjiang(base), seen_names)
+                    # 落盘名按平台清洗（把 .forjiang 后缀也算进长度预算）：
+                    # 带 : * ? 或超长的名字在 Windows 上写不下去
+                    stem = _unique_name(
+                        _disk_name(strip_forjiang(base), out_dir, len(SUFFIX)),
+                        seen_names)
                     out_path = os.path.join(out_dir, stem + SUFFIX)
                     r = password_encrypt_file(src, out_path, password, origin=stem)
                 else:
                     if not base.endswith(SUFFIX):
                         raise ValueError("请选择 .forjiang 文件")
-                    r = password_decrypt_file(src, os.path.join(out_dir, "staging.out"),
-                                              password)
+                    staging = os.path.join(out_dir, f".forjiang-staging-{token}")
+                    r = password_decrypt_file(src, staging, password)
                     final_name = _unique_name(
-                        _sanitize_name(r.origin or "decrypted.bin"), seen_names)
+                        _disk_name(_sanitize_name(r.origin or "decrypted.bin"),
+                                   out_dir, 0), seen_names)
                     final_path = os.path.join(out_dir, final_name)
                     os.replace(r.output_path, final_path)
                     r.output_path = final_path
@@ -425,8 +450,13 @@ class Handler(BaseHTTPRequestHandler):
         response = {"ok": ok_count == len(results), "results": results}
         # 文件夹模式：产物打包成单个 zip（浏览器通常会拦截多个自动下载）
         if folder and outputs:
-            tag = os.path.basename(folder.rstrip("/" + chr(92))) or "folder"
-            zip_path = os.path.join(out_dir, f"{tag}{'-forjiang' if encrypting else '-解密'}.zip")
+            # zip 名带本次请求的唯一后缀：同名文件夹连续处理两次时，
+            # 上一次还没下载的包不会被覆盖；文件夹名按平台清洗
+            tag = _disk_name(
+                os.path.basename(folder.rstrip("/\\")) or "folder", out_dir, 20)
+            zip_path = os.path.join(
+                out_dir,
+                f"{tag}{'-forjiang' if encrypting else '-解密'}-{token}.zip")
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for p in outputs:
                     zf.write(p, os.path.basename(p))
