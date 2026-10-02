@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forjiang-crypto 加密系统</title>
+<style>
+  /* 与桌面版界面同一套设计系统：相同的变量、卡片、标签、按钮、日志 */
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --hint: #777777;
+    --border: #d0d0d0;
+    --input-bg: #ffffff;
+    --input-border: #bbbbbb;
+    --input-fg: #1a1a1a;
+    --panel-bg: #fafafa;
+    --btn-bg: #f5f5f5;
+    --btn-bg-hover: #e8e8e8;
+    --btn-border: #444444;
+    --ok: #0a7a2f;
+    --err: #b3261e;
+    --info: #555555;
+    --label-fg: #333333;
+    --inline-fg: #444444;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a;
+      --fg: #e7e9ee;
+      --muted: #9aa2ae;
+      --hint: #8b939e;
+      --border: #2f353f;
+      --input-bg: #1b1f26;
+      --input-border: #3b4351;
+      --input-fg: #e7e9ee;
+      --panel-bg: #171b21;
+      --btn-bg: #232935;
+      --btn-bg-hover: #2d3441;
+      --btn-border: #4a5261;
+      --ok: #4ade80;
+      --err: #f87171;
+      --info: #97a0ad;
+      --label-fg: #c9cfd9;
+      --inline-fg: #b9c0cb;
+      --accent: #6ea8ff;
+    }
+  }
+  /* 控件统一高度与间距（与桌面版一致的规则） */
+  :root { --ctrl-h: 34px; --gap: 12px; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 24px auto; padding: 0 16px;
+    color: var(--fg); background: var(--bg);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .sub a { color: var(--accent); text-decoration: none; }
+  section {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--label-fg); }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; height: var(--ctrl-h); padding: 6px 8px; font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  input[type=file] {
+    width: 100%; height: var(--ctrl-h); padding: 5px 8px; font-size: 13px;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  button {
+    margin-top: 12px; height: var(--ctrl-h); padding: 0 18px; font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--btn-border); border-radius: 4px;
+    background: var(--btn-bg); color: var(--fg);
+  }
+  button:hover { background: var(--btn-bg-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { height: 6px; border: 1px solid var(--border); border-radius: 3px;
+         background: var(--panel-bg); overflow: hidden; margin-top: 12px; display: none; }
+  .bar.on { display: block; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent);
+           transition: width .15s; }
+  .log {
+    margin-top: 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel-bg); color: var(--fg); padding: 10px 12px; font-size: 12.5px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto;
+    min-height: 2.6em;
+  }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+  .info { color: var(--info); }
+  .hint { font-size: 12px; color: var(--hint); margin-top: 4px; }
+  ul.notes { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; padding-left: 18px; }
+  ul.notes li { margin: 3px 0; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>forjiang-crypto 加密系统</h1>
+<div class="sub">纯浏览器版：选文件、设密码、点按钮，加解密全在本机完成，文件不会上传到任何服务器。
+桌面版（Python）另有公钥加密、目录批量，见 <a href="https://github.com/ForJiang/forjiang-crypto">仓库说明</a>。</div>
+
+<section>
+  <h2>1. 加密文件</h2>
+  <label>选择文件（可多选）</label>
+  <input type="file" id="encFile" multiple>
+  <label>设置密码（至少 6 位，丢失无法恢复）</label>
+  <input type="password" id="encPwd" placeholder="至少 6 位">
+  <label>再输一遍密码</label>
+  <input type="password" id="encPwd2" placeholder="确认密码">
+  <button id="encBtn">加密并下载 .forjiang</button>
+  <div class="bar" id="encBar"><i></i></div>
+  <div class="log" id="encLog"></div>
+  <div class="hint">流程：每个文件单独派生一把 AES-256 密钥（PBKDF2 60 万次），内容用 AES-256-GCM 分块加密，产物后缀 .forjiang。</div>
+</section>
+
+<section>
+  <h2>2. 解密 .forjiang</h2>
+  <label>选择 .forjiang 文件（可多选）</label>
+  <input type="file" id="decFile" accept=".forjiang" multiple>
+  <label>输入密码</label>
+  <input type="password" id="decPwd" placeholder="加密时设置的密码">
+  <button id="decBtn">解密并下载</button>
+  <div class="bar" id="decBar"><i></i></div>
+  <div class="log" id="decLog"></div>
+  <div class="hint">解密成功后按文件头记录的原始文件名恢复并下载；密码错误或文件被改动会明确报错。</div>
+</section>
+
+<section>
+  <h2>关于这个页面</h2>
+  <ul class="notes">
+    <li>本页不依赖任何服务器：所有加解密由浏览器的 WebCrypto 完成，页面关掉即无痕迹。</li>
+    <li>文件格式与桌面版密码模式一致（魔数 <code>FJGPASS1</code>），这里加密的文件可以用桌面版解密，反之亦然。</li>
+    <li>桌面版额外支持 RSA 公钥加密（只需公钥即可加密）、目录批量、图形界面，源码在同仓库的 <code>forjiang_crypto/</code>。</li>
+    <li>密码只在本机内存中使用，密钥经 60 万次 PBKDF2 派生，暴力破解代价高；但密码忘了没人能恢复。</li>
+  </ul>
+</section>
+
+<script>
+"use strict";
+
+// ---- 格式常量：必须与桌面版 forjiang_crypto/codec.py 完全一致 ----
+const MAGIC_TEXT = "FJGPASS1";      // 8 字节魔数
+const FORMAT_VERSION = 1;
+const KDF_PBKDF2 = 1;
+const ITERATIONS = 600000;          // PBKDF2-HMAC-SHA256 迭代次数
+const SALT_LEN = 16;
+const NAME_MAX = 512;               // 文件头里文件名的字节上限
+const CHUNK_SIZE = 1 << 20;         // 1 MiB 分块
+const KEY_BITS = 256;               // AES-256
+const NONCE_LEN = 12;               // GCM nonce
+const TAG_LEN = 16;                 // GCM tag
+const HEADER_SIZE = 8 + 1 + 1 + 4 + 1 + 2;   // 魔数+版本+kdf+迭代+盐长+名长 = 17
+const SUFFIX = ".forjiang";
+const MIN_PASSWORD = 6;
+
+const WINDOWS_RESERVED = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3",
+  "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3",
+  "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+
+const $ = (id) => document.getElementById(id);
+
+// ---- 字节小工具 ----
+function ascii(text) {
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+  return out;
+}
+function bytesToText(bytes) {
+  let out = "";
+  for (const b of bytes) out += String.fromCharCode(b);
+  return out;
+}
+function sameBytes(a, b) {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function u8(n) { return new Uint8Array([n]); }
+function u16be(n) {
+  const b = new Uint8Array(2);
+  new DataView(b.buffer).setUint16(0, n, false);
+  return b;
+}
+function u32be(n) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n, false);
+  return b;
+}
+function u64be(n) {                  // 块序号：大端 8 字节
+  const b = new Uint8Array(8), v = new DataView(b.buffer);
+  v.setUint32(0, Math.floor(n / 4294967296), false);
+  v.setUint32(4, n >>> 0, false);
+  return b;
+}
+function concat(...parts) {
+  let total = 0;
+  for (const p of parts) total += p.byteLength;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.byteLength; }
+  return out;
+}
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v < 10 ? 2 : 1) + " " + units[i];
+}
+
+// ---- 日志区：按行着色，[成功]/[失败] 与桌面版界面同一套文字约定 ----
+function guessClass(text) {
+  if (text.indexOf("[成功]") === 0) return "ok";
+  if (text.indexOf("[失败]") === 0 || text.indexOf("错误：") === 0 ||
+      text.indexOf("请先") === 0) return "err";
+  return "info";
+}
+function say(el, text, cls) {
+  if (!el.__lines) el.__lines = [];
+  el.__lines.push({ text: text, cls: cls || guessClass(text) });
+  el.textContent = "";
+  for (const line of el.__lines) {
+    const span = document.createElement("span");
+    span.textContent = line.text;
+    span.className = line.cls;
+    el.appendChild(span);
+    el.appendChild(document.createTextNode("\n"));
+  }
+  el.scrollTop = el.scrollHeight;
+}
+function setBar(bar, pct) {
+  bar.classList.add("on");
+  bar.querySelector("i").style.width = pct + "%";
+}
+
+// ---- 下载名：Windows 禁用的字符、控制字符、保留设备名、结尾点空格 ----
+function safeDownloadName(name) {
+  let n = String(name || "").replace(/\\/g, "/").split("/").pop() || "";
+  n = n.replace(/[<>:"|?*\x00-\x1f\x7f]/g, "_").replace(/[. ]+$/, "");
+  if (!n) return "decrypted.bin";
+  if (WINDOWS_RESERVED.indexOf(n.split(".")[0].toUpperCase()) !== -1) n = "_" + n;
+  return n;
+}
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ---- 加密原语 ----
+async function deriveKey(password, salt) {
+  const material = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: salt, iterations: ITERATIONS, hash: "SHA-256" },
+    material, KEY_BITS);
+  return crypto.subtle.importKey("raw", bits, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+// 分块读文件：优先 file.stream()，老浏览器退回 slice；内存里始终只有一个块
+async function* chunksOf(file) {
+  if (typeof file.stream === "function") {
+    const reader = file.stream().getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        if (value && value.byteLength) {
+          yield value instanceof Uint8Array ? value : new Uint8Array(value);
+        }
+      }
+    } finally {
+      try { reader.releaseLock(); } catch (e) { /* 流已关闭时也会抛，忽略 */ }
+    }
+  } else {
+    for (let off = 0; off < file.size; off += CHUNK_SIZE) {
+      const end = Math.min(off + CHUNK_SIZE, file.size);
+      yield new Uint8Array(await file.slice(off, end).arrayBuffer());
+    }
+  }
+}
+
+async function sealChunk(key, header, index, plaintext) {
+  const iv = crypto.getRandomValues(new Uint8Array(NONCE_LEN));
+  const aad = concat(header, u64be(index));
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: iv, additionalData: aad, tagLength: 128 },
+    key, plaintext));
+  return concat(iv, u32be(ct.byteLength), ct);
+}
+
+async function encryptFile(file, password, onProgress) {
+  if (file.name.toLowerCase().endsWith(SUFFIX)) {
+    throw new Error(file.name + " 已经是 .forjiang 加密文件");
+  }
+  const nameBytes = new TextEncoder().encode(safeDownloadName(file.name));
+  if (nameBytes.byteLength > NAME_MAX) {
+    throw new Error("文件名过长（" + nameBytes.byteLength + " 字节，上限 " + NAME_MAX + "）");
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const key = await deriveKey(password, salt);
+  const header = concat(
+    ascii(MAGIC_TEXT), u8(FORMAT_VERSION), u8(KDF_PBKDF2), u32be(ITERATIONS),
+    u8(SALT_LEN), u16be(nameBytes.byteLength), salt, nameBytes
+  );
+  const parts = [header];
+  let index = 0, done = 0;
+  for await (const chunk of chunksOf(file)) {
+    parts.push(await sealChunk(key, header, index++, chunk));
+    done += chunk.byteLength;
+    if (onProgress) onProgress(done / file.size);
+  }
+  // 结束块：明文为空但带认证 tag，缺了它说明文件被截断
+  parts.push(await sealChunk(key, header, index, new Uint8Array(0)));
+  return { blob: new Blob(parts, { type: "application/octet-stream" }),
+           plainSize: done };
+}
+
+async function decryptFile(file, password, onProgress) {
+  const prefix = new Uint8Array(await file.slice(0, HEADER_SIZE).arrayBuffer());
+  if (prefix.byteLength < HEADER_SIZE) {
+    throw new Error("文件不足一个文件头长度，不是有效的 .forjiang 文件");
+  }
+  if (!sameBytes(prefix.subarray(0, 8), ascii(MAGIC_TEXT))) {
+    throw new Error("不是本格式加密的文件（魔数 " +
+                    bytesToText(prefix.subarray(0, 8)) + "）");
+  }
+  const pv = new DataView(prefix.buffer, prefix.byteOffset);
+  const version = prefix[8], kdf = prefix[9];
+  const iterations = pv.getUint32(10, false);
+  const saltLen = prefix[14];
+  const nameLen = pv.getUint16(15, false);
+  if (version !== FORMAT_VERSION) throw new Error("不支持的文件格式版本 " + version);
+  if (kdf !== KDF_PBKDF2) throw new Error("不支持的密钥派生算法 " + kdf);
+  if (iterations < 1 || iterations > 50000000) {
+    throw new Error("文件头中的迭代次数异常：" + iterations);
+  }
+  if (saltLen !== SALT_LEN) throw new Error("盐长度异常：" + saltLen);
+  if (nameLen > NAME_MAX) throw new Error("文件头中的文件名长度异常（" + nameLen + "）");
+
+  const rest = new Uint8Array(await file.slice(HEADER_SIZE, HEADER_SIZE + saltLen + nameLen).arrayBuffer());
+  if (rest.byteLength < saltLen + nameLen) throw new Error("文件头被截断");
+  const salt = rest.subarray(0, saltLen);
+  const nameBytes = rest.subarray(saltLen, saltLen + nameLen);
+  const headerBytes = concat(prefix, rest);
+  const originalName = new TextDecoder().decode(nameBytes) || "decrypted.bin";
+
+  const key = await deriveKey(password, salt);
+  let pos = HEADER_SIZE + saltLen + nameLen;
+  let index = 0, done = 0, sawTerminator = false;
+  const parts = [];
+  while (true) {
+    const chunkHead = new Uint8Array(
+      await file.slice(pos, pos + NONCE_LEN + 4).arrayBuffer());
+    if (chunkHead.byteLength === 0) throw new Error("文件在结束块之前就被截断");
+    if (chunkHead.byteLength < NONCE_LEN + 4) throw new Error("文件数据不完整（块头被截断）");
+    const view = new DataView(chunkHead.buffer, chunkHead.byteOffset);
+    const ctLen = view.getUint32(NONCE_LEN, false);
+    if (ctLen > CHUNK_SIZE + TAG_LEN) throw new Error("块长度异常：" + ctLen);
+    const iv = chunkHead.subarray(0, NONCE_LEN);
+    const start = pos + NONCE_LEN + 4;
+    const ct = new Uint8Array(await file.slice(start, start + ctLen).arrayBuffer());
+    if (ct.byteLength !== ctLen) throw new Error("文件数据不完整（密文被截断）");
+    let plain;
+    try {
+      plain = new Uint8Array(await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv, additionalData: concat(headerBytes, u64be(index)),
+          tagLength: 128 },
+        key, ct));
+    } catch (e) {
+      throw new Error("认证失败：密码错误，或文件已被篡改");
+    }
+    index++;
+    pos = start + ctLen;
+    if (ctLen === TAG_LEN) { sawTerminator = true; break; }   // 结束块
+    parts.push(plain);
+    done += plain.byteLength;
+    if (onProgress) onProgress(done / file.size);
+  }
+  if (!sawTerminator) throw new Error("文件缺少结束块，可能被截断");
+  return { blob: new Blob(parts, { type: "application/octet-stream" }),
+           plainSize: done, name: safeDownloadName(originalName) };
+}
+
+// ---- 界面逻辑 ----
+function checkSupport() {
+  if (!(window.crypto && crypto.subtle)) {
+    return "当前浏览器不支持 WebCrypto（或页面不是用 https 打开的），无法在本机加解密。";
+  }
+  return null;
+}
+function passwordError(p1, p2, needConfirm) {
+  if (!p1) return "请先设置密码";
+  if (p1.length < MIN_PASSWORD) return "密码至少 " + MIN_PASSWORD + " 位";
+  if (needConfirm && p1 !== p2) return "两次输入的密码不一致";
+  return null;
+}
+
+$("encBtn").onclick = async () => {
+  const log = $("encLog"), bar = $("encBar"), btn = $("encBtn");
+  const files = Array.from($("encFile").files);
+  const p1 = $("encPwd").value, p2 = $("encPwd2").value;
+  const unsupported = checkSupport();
+  if (unsupported) { log.__lines = []; say(log, "错误：" + unsupported); return; }
+  if (!files.length) { say(log, "请先选择要加密的文件。"); return; }
+  const perr = passwordError(p1, p2, true);
+  if (perr) { say(log, perr); return; }
+
+  btn.disabled = true;
+  log.__lines = [];
+  let ok = 0;
+  for (const file of files) {
+    try {
+      const r = await encryptFile(file, p1, (p) => setBar(bar, Math.round(p * 100)));
+      const outName = safeDownloadName(file.name) + SUFFIX;
+      downloadBlob(r.blob, outName);
+      ok++;
+      say(log, "[成功] " + file.name + " -> " + outName +
+          "（" + fmtBytes(r.plainSize) + " -> " + fmtBytes(r.blob.size) + "）");
+    } catch (e) {
+      say(log, "[失败] " + file.name + "：" + (e.message || e));
+    }
+  }
+  bar.classList.remove("on");
+  say(log, "完成 " + ok + "/" + files.length + " 个文件", ok ? "ok" : "err");
+  if (ok) {
+    say(log, "浏览器可能拦截多个下载，若只收到一个请允许本站多次下载。");
+  }
+  btn.disabled = false;
+};
+
+$("decBtn").onclick = async () => {
+  const log = $("decLog"), bar = $("decBar"), btn = $("decBtn");
+  const files = Array.from($("decFile").files);
+  const p1 = $("decPwd").value;
+  const unsupported = checkSupport();
+  if (unsupported) { log.__lines = []; say(log, "错误：" + unsupported); return; }
+  if (!files.length) { say(log, "请先选择要解密的 .forjiang 文件。"); return; }
+  const perr = passwordError(p1, null, false);
+  if (perr) { say(log, perr); return; }
+
+  btn.disabled = true;
+  log.__lines = [];
+  let ok = 0;
+  for (const file of files) {
+    try {
+      if (!file.name.toLowerCase().endsWith(SUFFIX)) {
+        throw new Error("不是 .forjiang 文件");
+      }
+      const r = await decryptFile(file, p1, (p) => setBar(bar, Math.round(p * 80 + 10)));
+      downloadBlob(r.blob, r.name);
+      ok++;
+      say(log, "[成功] " + file.name + " -> " + r.name + "（" + fmtBytes(r.plainSize) + "）");
+    } catch (e) {
+      say(log, "[失败] " + file.name + "：" + (e.message || e));
+    }
+  }
+  bar.classList.remove("on");
+  say(log, "完成 " + ok + "/" + files.length + " 个文件", ok ? "ok" : "err");
+  if (ok) {
+    say(log, "解密出的文件已按原文件名下载，注意别覆盖本机上的同名文件。");
+  }
+  btn.disabled = false;
+};
+</script>
+</body>
+</html>

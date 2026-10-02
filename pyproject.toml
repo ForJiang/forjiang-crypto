@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forjiang-crypto"
+version = "1.1.1"
+description = "AES-256-GCM 文件加密系统：公钥封装会话密钥，上传文件统一改 .txt 后加密为 .forjiang"
+requires-python = ">=3.8"
+dependencies = ["cryptography>=3.4"]
+
+[project.scripts]
+forjiang-crypto = "forjiang_crypto.cli:main"
+
+[tool.setuptools]
+packages = ["forjiang_crypto"]

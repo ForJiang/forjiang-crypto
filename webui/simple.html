@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forjiang-crypto 加密系统（简版）</title>
+<style>
+  /* 与完整版（index.html）同一套设计系统：相同的变量、卡片、标签、按钮、日志 */
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --hint: #777777;
+    --border: #d0d0d0;
+    --input-bg: #ffffff;
+    --input-border: #bbbbbb;
+    --input-fg: #1a1a1a;
+    --panel-bg: #fafafa;
+    --btn-bg: #f5f5f5;
+    --btn-bg-hover: #e8e8e8;
+    --btn-border: #444444;
+    --ok: #0a7a2f;
+    --err: #b3261e;
+    --info: #555555;
+    --label-fg: #333333;
+    --inline-fg: #444444;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a;
+      --fg: #e7e9ee;
+      --muted: #9aa2ae;
+      --hint: #8b939e;
+      --border: #2f353f;
+      --input-bg: #1b1f26;
+      --input-border: #3b4351;
+      --input-fg: #e7e9ee;
+      --panel-bg: #171b21;
+      --btn-bg: #232935;
+      --btn-bg-hover: #2d3441;
+      --btn-border: #4a5261;
+      --ok: #4ade80;
+      --err: #f87171;
+      --info: #97a0ad;
+      --label-fg: #c9cfd9;
+      --inline-fg: #b9c0cb;
+      --accent: #6ea8ff;
+    }
+  }
+  /* 控件统一高度与间距（与完整版一致的规则） */
+  :root { --ctrl-h: 34px; --gap: 12px; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 24px auto; padding: 0 16px;
+    color: var(--fg); background: var(--bg);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .sub a { color: var(--accent); }
+  section {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--label-fg); }
+  .pathrow { display: flex; gap: var(--gap); align-items: stretch; }
+  .pathrow input { flex: 1 1 auto; min-width: 0; }
+  button.browse { margin-top: 0; flex: 0 0 auto; width: 74px; height: var(--ctrl-h);
+                  padding: 0 6px; font-size: 12px; white-space: nowrap; }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; height: var(--ctrl-h); padding: 6px 8px; font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  input[type=file] {
+    width: 100%; height: var(--ctrl-h); padding: 5px 8px; font-size: 13px;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 220px; }
+  .checks { display: flex; gap: 16px; margin: 10px 0; font-size: 13px; }
+  .checks label { display: flex; align-items: center; gap: 5px; margin: 0; }
+  button {
+    margin-top: 12px; height: var(--ctrl-h); padding: 0 18px; font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--btn-border); border-radius: 4px;
+    background: var(--btn-bg); color: var(--fg);
+  }
+  .btnrow { display: flex; gap: var(--gap); flex-wrap: wrap; align-items: center; }
+  .btnrow button { margin-top: 12px; }
+  button:hover { background: var(--btn-bg-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { height: 6px; border: 1px solid var(--border); border-radius: 3px;
+         background: var(--panel-bg); overflow: hidden; margin-top: 12px; display: none; }
+  .bar.on { display: block; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent);
+           transition: width .15s; }
+  #encLog, #decLog {
+    margin-top: 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel-bg); color: var(--fg); padding: 10px 12px; font-size: 12.5px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto;
+    min-height: 2.6em;
+  }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+  .info { color: var(--info); }
+  .hint { font-size: 12px; color: var(--hint); margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>forjiang-crypto 加密系统</h1>
+<div class="sub">选文件、设密码、点按钮，加密/解密后的文件自动下载。文件由本机服务处理，不会上传到任何服务器。
+需要公钥加密、批量处理、目录选择？<a href="/full">打开完整版</a></div>
+
+<section>
+  <h2>1. 加密文件</h2>
+  <label>选择文件（可多选）</label>
+  <input type="file" id="encFile" multiple>
+    <label>或选择整个文件夹（含子目录；已加密的 .forjiang 会跳过，产物打包成 zip 下载）</label>
+    <div class="pathrow">
+      <input type="text" id="enc-folder" placeholder="未选择：点右侧“浏览...”或手动输入">
+      <button type="button" class="browse" data-for="enc-folder" data-kind="dir" data-title="选择要加密的文件夹">浏览...</button>
+    </div>
+  <label>设置密码（至少 6 位，丢失无法恢复）</label>
+  <input type="password" id="encPwd" placeholder="至少 6 位">
+  <div class="btnrow">
+  <button id="encBtn">加密并下载 .forjiang</button>
+  </div>
+  <div class="bar" id="encBar"><i></i></div>
+  <div class="log" id="encLog"></div>
+  <div class="hint">流程：文件先统一改名 .txt，再用 AES-256-GCM 加密，产物后缀 .forjiang。</div>
+</section>
+
+<section>
+  <h2>2. 解密 .forjiang</h2>
+  <label>选择 .forjiang 文件（可多选）</label>
+  <input type="file" id="decFile" accept=".forjiang" multiple>
+    <label>或选择整个文件夹（含子目录；只处理其中的 .forjiang，产物打包成 zip 下载）</label>
+    <div class="pathrow">
+      <input type="text" id="dec-folder" placeholder="未选择：点右侧“浏览...”或手动输入">
+      <button type="button" class="browse" data-for="dec-folder" data-kind="dir" data-title="选择要解密的文件夹">浏览...</button>
+    </div>
+  <label>输入密码</label>
+  <input type="password" id="decPwd" placeholder="加密时设置的密码">
+  <div class="btnrow">
+  <button id="decBtn">解密并下载</button>
+  </div>
+  <div class="bar" id="decBar"><i></i></div>
+  <div class="log" id="decLog"></div>
+  <div class="hint">解密成功后按文件头记录的原始文件名恢复并自动下载。</div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+function download(url, filename) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function setBar(bar, pct) {
+  bar.classList.add('on');
+  bar.querySelector('i').style.width = pct + '%';
+}
+
+// 统一读 JSON：先拿文本再解析。服务端若在中途挂掉、或被别的程序占了端口，
+// 回来的可能是半截 HTML 甚至空 body，直接 r.json() 只会抛一句看不懂的
+// SyntaxError，这里换成能照着排查的一句话。
+async function readJson(r) {
+  const text = await r.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error('服务端返回了无法解析的内容（HTTP ' + r.status + '）：' +
+                    text.slice(0, 120));
+  }
+}
+
+// 文件夹输入行的“浏览...”：让服务端弹系统原生目录选择框，回填真实路径
+document.querySelectorAll("button.browse").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const input = document.getElementById(btn.dataset.for);
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/pick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: btn.dataset.kind, title: btn.dataset.title,
+                               initial: input.value.trim() }),
+      });
+      const data = await readJson(r);
+      if (r.status === 501) { say_to(btn, "当前环境不能弹系统选择框，请手动输入文件夹路径。"); return; }
+      if (!r.ok) { say_to(btn, "选择失败: " + (data.error || r.status)); return; }
+      if (data.path) { input.value = data.path; say_to(btn, "已选择文件夹: " + data.path); }
+      else say_to(btn, "已取消选择。");
+    } catch (e) {
+      say_to(btn, "请求失败: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+});
+// 浏览按钮的提示写到同卡片的日志里
+function say_to(btn, text, cls) {
+  const log = btn.closest("section").querySelector(".log");
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+// 多文件时逐个下载（浏览器一般只放行一次自动下载，稍微错开）
+async function downloadAll(paths) {
+  for (const p of paths) {
+    download("/api/download?path=" + encodeURIComponent(p), p.split("/").pop());
+    await new Promise(r => setTimeout(r, 350));
+  }
+}
+
+function makeLogger(el) {
+  return (text, cls) => {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = text;
+    el.appendChild(d);
+    el.scrollTop = el.scrollHeight;
+  };
+}
+
+/* ---- 加密 ---- */
+$('encBtn').onclick = async () => {
+  const log = $('encLog'), bar = $('encBar'), btn = $('encBtn');
+  const files = Array.from($('encFile').files);
+  const folder = $('enc-folder').value.trim();
+  const pwd  = $('encPwd').value;
+  log.innerHTML = '';
+  bar.querySelector('i').style.width = '0%';
+  const say = makeLogger(log);
+
+  if (!files.length && !folder) return say('请选择文件（可多选）或选择一个文件夹', 'err');
+  if (files.length && folder) return say('文件和文件夹只能选一种，请清掉其中一个', 'err');
+  if (!pwd || pwd.length < 6) return say('密码至少 6 位', 'err');
+
+  btn.disabled = true;
+  try {
+    const form = new FormData();
+    if (folder) {
+      say('已选择文件夹：' + folder + '（含子目录，扫描中…）');
+      form.append('folder', folder);
+    } else {
+      const total = files.reduce((n, f) => n + f.size, 0);
+      say('已选择 ' + files.length + ' 个文件（共 ' + fmtBytes(total) + '）');
+      for (const f of files) form.append('files', f, f.name);
+    }
+    form.append('password', pwd);
+    setBar(bar, 30);
+    const r = await fetch('/api/simple/encrypt', { method: 'POST', body: form });
+    const data = await readJson(r);
+    if (!r.ok || !data.results) { say('失败：' + (data.error || r.status), 'err'); return; }
+
+    const outputs = [];
+    let ok = 0;
+    for (const item of data.results) {
+      if (item.ok) {
+        ok++;
+        say('[成功] ' + item.file + ' -> ' + item.output.split('/').pop() +
+            '（' + fmtBytes(item.plain) + ' -> ' + fmtBytes(item.cipher) + '）', 'ok');
+        outputs.push(item.output);
+      } else {
+        say('[失败] ' + item.file + '：' + item.error, 'err');
+      }
+    }
+    setBar(bar, 100);
+    say('完成 ' + ok + '/' + data.results.length + ' 个文件', ok ? 'ok' : 'err');
+    if (data.zip) {
+      say('已打包成 ' + data.zip.split('/').pop() + '，开始下载…', 'info');
+      download('/api/download?path=' + encodeURIComponent(data.zip),
+               data.zip.split('/').pop());
+    } else if (outputs.length) {
+      say('开始下载 ' + outputs.length + ' 个 .forjiang 文件…', 'info');
+      await downloadAll(outputs);
+    }
+  } catch (e) {
+    say('错误：' + (e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+    bar.classList.remove('on');
+  }
+};
+
+/* ---- 解密 ---- */
+$('decBtn').onclick = async () => {
+  const log = $('decLog'), bar = $('decBar'), btn = $('decBtn');
+  const files = Array.from($('decFile').files);
+  const folder = $('dec-folder').value.trim();
+  const pwd  = $('decPwd').value;
+  log.innerHTML = '';
+  bar.querySelector('i').style.width = '0%';
+  const say = makeLogger(log);
+
+  if (!files.length && !folder) return say('请选择 .forjiang 文件（可多选）或选择一个文件夹', 'err');
+  if (files.length && folder) return say('文件和文件夹只能选一种，请清掉其中一个', 'err');
+  if (!pwd) return say('请输入密码', 'err');
+
+  btn.disabled = true;
+  try {
+    const form = new FormData();
+    if (folder) {
+      say('已选择文件夹：' + folder + '（含子目录，只处理 .forjiang）');
+      form.append('folder', folder);
+    } else {
+      say('已选择 ' + files.length + ' 个文件');
+      for (const f of files) form.append('files', f, f.name);
+    }
+    form.append('password', pwd);
+    setBar(bar, 30);
+    const r = await fetch('/api/simple/decrypt', { method: 'POST', body: form });
+    const data = await readJson(r);
+    if (!r.ok || !data.results) { say('失败：' + (data.error || r.status), 'err'); return; }
+
+    const outputs = [];
+    let ok = 0;
+    for (const item of data.results) {
+      if (item.ok) {
+        ok++;
+        say('[成功] ' + item.file + ' -> ' + item.output.split('/').pop(), 'ok');
+        outputs.push(item.output);
+      } else {
+        say('[失败] ' + item.file + '：' + item.error, 'err');
+      }
+    }
+    setBar(bar, 100);
+    say('完成 ' + ok + '/' + data.results.length + ' 个文件', ok ? 'ok' : 'err');
+    if (data.zip) {
+      say('已打包成 ' + data.zip.split('/').pop() + '，开始下载…', 'info');
+      download('/api/download?path=' + encodeURIComponent(data.zip),
+               data.zip.split('/').pop());
+    } else if (outputs.length) {
+      say('开始下载 ' + outputs.length + ' 个文件…', 'info');
+      await downloadAll(outputs);
+    }
+  } catch (e) {
+    say('错误：' + (e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+    bar.classList.remove('on');
+  }
+};
+</script>
+</body>
+</html>

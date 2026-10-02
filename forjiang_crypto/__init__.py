@@ -1,0 +1,98 @@
+"""forjiang-crypto：AES-256-GCM 文件加密系统（公钥封装会话密钥的混合加密）。
+
+两种用法：
+- 完整模式：RSA 公钥封装会话密钥（keygen/encrypt/decrypt、完整版网页界面）；
+- 密码模式：PBKDF2 派生密钥直接加密（简版网页界面、CLI --password）。
+"""
+
+from .exceptions import (
+    DecryptionError,
+    ForjiangCryptoError,
+    HeaderError,
+    KeyError_,
+    KeyPasswordRequired,
+    TamperError,
+)
+from .keys import (
+    KeyPair,
+    generate_keypair,
+    load_private_key,
+    load_public_key,
+    public_key_from_private,
+    save_keypair,
+    unwrap_key,
+    wrap_key,
+)
+from .codec import (
+    CHUNK_SIZE,
+    MAGIC,
+    NONCE_LEN,
+    PASSWORD_KDF_PBKDF2,
+    PASSWORD_MAGIC,
+    PASSWORD_MIN_LEN,
+    PASSWORD_SALT_LEN,
+    PBKDF2_ITERATIONS,
+    PREFIX_LEN,
+    SUFFIX,
+    TAG_LEN,
+    TXT_SUFFIX,
+    Result,
+    decrypt_file,
+    decrypt_forjiang,
+    decrypt_stream,
+    encrypt_file,
+    encrypt_stream,
+    encrypt_uploaded,
+    is_password_format,
+    parse_header,
+    password_decrypt_file,
+    password_decrypt_stream,
+    password_encrypt_file,
+    strip_forjiang,
+    txt_name,
+)
+
+__version__ = "1.1.1"
+
+__all__ = [
+    "CHUNK_SIZE",
+    "MAGIC",
+    "NONCE_LEN",
+    "PASSWORD_KDF_PBKDF2",
+    "PASSWORD_MAGIC",
+    "PASSWORD_MIN_LEN",
+    "PASSWORD_SALT_LEN",
+    "PBKDF2_ITERATIONS",
+    "PREFIX_LEN",
+    "SUFFIX",
+    "TAG_LEN",
+    "TXT_SUFFIX",
+    "DecryptionError",
+    "ForjiangCryptoError",
+    "HeaderError",
+    "KeyError_",
+    "KeyPasswordRequired",
+    "KeyPair",
+    "Result",
+    "TamperError",
+    "decrypt_file",
+    "decrypt_forjiang",
+    "decrypt_stream",
+    "encrypt_file",
+    "encrypt_stream",
+    "encrypt_uploaded",
+    "generate_keypair",
+    "is_password_format",
+    "load_private_key",
+    "load_public_key",
+    "parse_header",
+    "password_decrypt_file",
+    "password_decrypt_stream",
+    "password_encrypt_file",
+    "public_key_from_private",
+    "save_keypair",
+    "strip_forjiang",
+    "txt_name",
+    "unwrap_key",
+    "wrap_key",
+]

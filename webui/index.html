@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forjiang-crypto 加密系统</title>
+<style>
+  /* 深浅色自适应：跟随系统 prefers-color-scheme，两套配色用同一组变量切换 */
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --hint: #777777;
+    --border: #d0d0d0;
+    --input-bg: #ffffff;
+    --input-border: #bbbbbb;
+    --input-fg: #1a1a1a;
+    --panel-bg: #fafafa;
+    --btn-bg: #f5f5f5;
+    --btn-bg-hover: #e8e8e8;
+    --btn-border: #444444;
+    --ok: #0a7a2f;
+    --err: #b3261e;
+    --accent: #2563eb;
+    --info: #555555;
+    --label-fg: #333333;
+    --inline-fg: #444444;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a;
+      --fg: #e7e9ee;
+      --muted: #9aa2ae;
+      --hint: #8b939e;
+      --border: #2f353f;
+      --input-bg: #1b1f26;
+      --input-border: #3b4351;
+      --input-fg: #e7e9ee;
+      --panel-bg: #171b21;
+      --btn-bg: #232935;
+      --btn-bg-hover: #2d3441;
+      --btn-border: #4a5261;
+      --ok: #4ade80;
+      --err: #f87171;
+      --accent: #6ea8ff;
+      --info: #97a0ad;
+      --label-fg: #c9cfd9;
+      --inline-fg: #b9c0cb;
+    }
+  }
+  /* 控件统一高度与间距：所有输入框/下拉/按钮高度一致，横向间距统一 */
+  :root { --ctrl-h: 34px; --gap: 12px; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 24px auto; padding: 0 16px;
+    color: var(--fg); background: var(--bg);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  section {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--label-fg); }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; height: var(--ctrl-h); padding: 6px 8px; font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  input[type=file] {
+    width: 100%; height: var(--ctrl-h); padding: 5px 8px; font-size: 13px;
+    border: 1px solid var(--input-border); border-radius: 4px;
+    background: var(--input-bg); color: var(--input-fg);
+  }
+  .row { display: flex; gap: var(--gap); flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 200px; }
+  .pathrow { display: flex; gap: var(--gap); align-items: stretch; }
+  .pathrow input { flex: 1 1 auto; min-width: 0; }
+  button.browse {
+    margin-top: 0; flex: 0 0 auto; width: 74px; height: var(--ctrl-h);
+    padding: 0 6px; font-size: 12px; white-space: nowrap;
+  }
+  label.inline { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--inline-fg); margin: 8px 0 0; }
+  .checks { display: flex; gap: 16px; margin: 12px 0; font-size: 13px;
+           align-items: center; }
+  .checks label { display: flex; align-items: center; gap: 5px; margin: 0; }
+  button {
+    margin-top: 12px; height: var(--ctrl-h); padding: 0 18px; font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--btn-border); border-radius: 4px;
+    background: var(--btn-bg); color: var(--fg);
+  }
+  .btnrow { display: flex; gap: var(--gap); flex-wrap: wrap; align-items: center; }
+  .btnrow button { margin-top: 12px; }
+  button:hover { background: var(--btn-bg-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  #log {
+    margin-top: 20px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel-bg); color: var(--fg); padding: 10px 12px; font-size: 12.5px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto;
+  }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+  .info { color: var(--info); }
+  .hint { font-size: 12px; color: var(--hint); margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>forjiang-crypto 加密系统</h1>
+<div class="sub">AES-256-GCM 加密文件内容，RSA 公钥封装会话密钥。上传文件统一改 .txt 后加密为 .forjiang；解密恢复原名。
+只想选文件、设密码、点按钮？<a href="/simple" style="color:var(--accent)">切换到简版界面</a></div>
+
+<section>
+  <h2>1. 生成密钥对</h2>
+  <div class="row">
+    <div>
+      <label>密钥目录</label>
+      <div class="pathrow">
+        <input type="text" id="keydir" placeholder="未选择：点右侧“浏览...”或手动输入">
+        <button type="button" class="browse" data-for="keydir" data-kind="dir" data-title="选择密钥目录">浏览…</button>
+      </div>
+    </div>
+    <div>
+      <label>文件名前缀</label>
+      <input type="text" id="keyname" value="forjiang">
+    </div>
+    <div>
+      <label>RSA 模长</label>
+      <select id="bits">
+        <option value="2048">2048</option>
+        <option value="3072" selected>3072</option>
+        <option value="4096">4096</option>
+      </select>
+    </div>
+  </div>
+  <label>私钥口令（可留空；设了口令解密时必须提供）</label>
+  <input type="password" id="keypass" placeholder="留空则私钥不加密">
+  <div class="btnrow">
+    <button id="btn-keygen">生成密钥对</button>
+    <button id="btn-reset" type="button">填入默认路径</button>
+  </div>
+  <div class="hint">公钥可随意分发；私钥只留在本机，切勿上传。<br>
+    路径默认不预填，请用“浏览...”选择或手动输入；“填入默认路径”可一键填成默认数据目录。</div>
+</section>
+
+<section>
+  <h2>2. 加密（只需公钥）</h2>
+  <label>选择文件（可多选）</label>
+  <input type="file" id="enc-files" multiple>
+  <label class="inline"><input type="checkbox" id="enc-dirmode"> 选择整个文件夹（含子目录，重名文件会带上子目录名）</label>
+  <div class="row">
+    <div>
+      <label>公钥路径</label>
+      <div class="pathrow">
+        <input type="text" id="enc-pub" placeholder="未选择：点右侧“浏览...”或手动输入">
+        <button type="button" class="browse" data-for="enc-pub" data-kind="file" data-title="选择公钥文件">浏览…</button>
+      </div>
+    </div>
+    <div>
+      <label>输出目录</label>
+      <div class="pathrow">
+        <input type="text" id="enc-out" placeholder="未选择：点右侧“浏览...”或手动输入">
+        <button type="button" class="browse" data-for="enc-out" data-kind="dir" data-title="选择加密输出目录">浏览…</button>
+      </div>
+    </div>
+  </div>
+  <div class="checks">
+    <label><input type="checkbox" id="enc-keeptxt"> 保留 .txt 中转件</label>
+    <label><input type="checkbox" id="enc-force"> 覆盖已存在输出</label>
+  </div>
+  <button id="btn-encrypt">加密</button>
+</section>
+
+<section>
+  <h2>3. 解密（需要私钥）</h2>
+  <label>选择 .forjiang 文件（可多选）</label>
+  <input type="file" id="dec-files" multiple accept=".forjiang">
+  <div class="row">
+    <div>
+      <label>私钥路径</label>
+      <div class="pathrow">
+        <input type="text" id="dec-priv" placeholder="未选择：点右侧“浏览...”或手动输入">
+        <button type="button" class="browse" data-for="dec-priv" data-kind="file" data-title="选择私钥文件">浏览…</button>
+      </div>
+    </div>
+    <div>
+      <label>输出目录</label>
+      <div class="pathrow">
+        <input type="text" id="dec-out" placeholder="未选择：点右侧“浏览...”或手动输入">
+        <button type="button" class="browse" data-for="dec-out" data-kind="dir" data-title="选择解密输出目录">浏览…</button>
+      </div>
+    </div>
+  </div>
+  <label>私钥口令（私钥未加密可留空）</label>
+  <input type="password" id="dec-pass">
+  <div class="checks">
+    <label><input type="checkbox" id="dec-keeptxt"> 保留 .txt 中转件</label>
+    <label><input type="checkbox" id="dec-force"> 覆盖已存在输出</label>
+  </div>
+  <button id="btn-decrypt">解密</button>
+</section>
+
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById("log");
+
+function log(text, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = text;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function human(n) {
+  if (n === undefined || n === null) return "?";
+  if (n < 1024) return n + " B";
+  const units = ["KiB", "MiB", "GiB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(1) + " " + units[i];
+}
+
+async function busy(btn, text, fn) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = text;
+  try { await fn(); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch("/api/config");
+    const cfg = await r.json();
+    window.__cfg = cfg;
+    lastKeydir = (document.getElementById("keydir").value || "").replace(/\/+$/, "");
+    if (cfg.canPick === false) {
+      // 没有系统选择框的环境（无 tkinter/无显示会话）：隐藏浏览按钮，保留手输
+      document.querySelectorAll("button.browse").forEach((b) => { b.style.display = "none"; });
+      log("当前环境不能弹系统选择框，路径请手动输入。", "info");
+    }
+    // 路径一律不预填，由用户自己选择；下面只提示默认数据目录作为参考
+    log("服务根目录: " + cfg.root + "（相对路径以它为基准）", "info");
+    log("所有路径均不预填，请用“浏览...”按钮或手动输入选择；", "info");
+    log("懒得选可点“填入默认路径”（默认数据目录: " + cfg.dataDir + "，不写进代码仓库）。", "info");
+  } catch (e) {
+    log("无法获取服务配置: " + e, "err");
+  }
+}
+
+function keyPaths() {
+  const keydir = (document.getElementById("keydir").value || "").replace(/\/+$/, "");
+  const name = document.getElementById("keyname").value.trim() || "forjiang";
+  return {
+    pub: keydir + "/" + name + ".pub.pem",
+    priv: keydir + "/" + name + ".priv.pem",
+  };
+}
+
+// 仅由“填入默认路径”按钮触发：把五个路径一次性填成默认数据目录下的位置
+function fillDefaults() {
+  const cfg = window.__cfg;
+  if (!cfg) return;
+  const base = cfg.dataDir;
+  document.getElementById("keydir").value = base + "/keys";
+  document.getElementById("enc-pub").value = base + "/keys/forjiang.pub.pem";
+  document.getElementById("enc-out").value = base + "/vault";
+  document.getElementById("dec-priv").value = base + "/keys/forjiang.priv.pem";
+  document.getElementById("dec-out").value = base + "/restored";
+}
+
+// ---- 路径“浏览…”：弹系统原生选择框，把真实绝对路径填回输入框 ----
+async function pickPath(btn) {
+  const input = document.getElementById(btn.dataset.for);
+  if (!input) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: btn.dataset.kind,
+        title: btn.dataset.title || "请选择",
+        initial: input.value.trim(),
+      }),
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* 忽略解析失败，走下面的分支 */ }
+    if (r.status === 501) {
+      log("当前环境不能弹系统选择框，请手动输入路径。", "err");
+      return;
+    }
+    if (!r.ok) {
+      log("选择失败: " + (data.error || r.status), "err");
+      return;
+    }
+    if (data.path) {
+      input.value = data.path;
+      input.dispatchEvent(new Event("input", { bubbles: true }));  // 触发公钥/私钥联动
+      log("已选择: " + data.path, "info");
+    } else {
+      log("已取消选择。", "info");
+    }
+  } catch (e) {
+    log("请求失败: " + e, "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.querySelectorAll("button.browse").forEach((btn) => {
+  btn.addEventListener("click", () => pickPath(btn));
+});
+
+// 勾选“选择整个文件夹”后，同一个文件框切换到目录选择模式
+const encDirMode = document.getElementById("enc-dirmode");
+encDirMode.addEventListener("change", () => {
+  document.getElementById("enc-files").webkitdirectory = encDirMode.checked;
+});
+
+// 密钥目录/文件名前缀变化时，公钥、私钥路径自动跟随；
+// 空路径（用户还没选）不替他填，已指向别处的自定义路径也不动。
+function syncKeyPaths(prevKeydir) {
+  const p = keyPaths();
+  const follow = (id) => {
+    const el = document.getElementById(id);
+    const v = el.value.trim();
+    if (v && prevKeydir && v.startsWith(prevKeydir + "/")) {
+      el.value = id === "enc-pub" ? p.pub : p.priv;
+    }
+  };
+  follow("enc-pub");
+  follow("dec-priv");
+}
+
+let lastKeydir = "";
+for (const id of ["keydir", "keyname"]) {
+  document.getElementById(id).addEventListener("input", () => {
+    const prev = lastKeydir;
+    lastKeydir = (document.getElementById("keydir").value || "").replace(/\/+$/, "");
+    syncKeyPaths(prev);
+  });
+}
+
+document.getElementById("btn-keygen").onclick = () =>
+  busy(document.getElementById("btn-keygen"), "生成中…", async () => {
+    const keydir = document.getElementById("keydir").value.trim();
+    if (!keydir) { log("请先选择或输入密钥目录。", "err"); return; }
+    const body = {
+      bits: parseInt(document.getElementById("bits").value, 10),
+      outdir: keydir,
+      name: document.getElementById("keyname").value.trim() || "forjiang",
+      password: document.getElementById("keypass").value,
+    };
+    log("生成 RSA-" + body.bits + " 密钥对 -> " + body.outdir + " …", "info");
+    const r = await fetch("/api/keygen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!data.ok) { log("失败: " + (data.error || r.status), "err"); return; }
+    log("公钥: " + data.pub, "ok");
+    log("私钥: " + data.priv + (data.encrypted ? "（已用口令加密）" : ""), "ok");
+  });
+
+function runCrypto(kind) {
+  const filesInput = document.getElementById(kind + "-files");
+  const files = filesInput.files;
+  if (!files.length) { log("请先选择文件", "err"); return; }
+  const btn = document.getElementById(kind === "enc" ? "btn-encrypt" : "btn-decrypt");
+  const out = document.getElementById(kind + "-out").value.trim();
+  const keyPath = (kind === "enc"
+    ? document.getElementById("enc-pub").value
+    : document.getElementById("dec-priv").value).trim();
+  if (!keyPath) {
+    log(kind === "enc" ? "请先选择公钥文件路径。" : "请先选择私钥文件路径。", "err");
+    return;
+  }
+  if (!out) { log("请先选择输出目录。", "err"); return; }
+  // 文件夹模式：把子目录名并进文件名，避免不同子目录的重名文件互相覆盖
+  const dirmode = kind === "enc" && document.getElementById("enc-dirmode").checked;
+  return busy(btn, kind === "enc" ? "加密中…" : "解密中…", async () => {
+    let r;
+    try {
+      const form = new FormData();
+      for (const f of files) {
+        let name = f.name;
+        if (dirmode && f.webkitRelativePath) {
+          name = f.webkitRelativePath.replace(/\//g, "_");
+        }
+        form.append("files", f, name);
+      }
+      form.append("outdir", out);
+      form.append("keep_txt", document.getElementById(kind + "-keeptxt").checked ? "1" : "");
+      form.append("force", document.getElementById(kind + "-force").checked ? "1" : "");
+      if (kind === "enc") {
+        form.append("pub", document.getElementById("enc-pub").value.trim());
+      } else {
+        form.append("priv", document.getElementById("dec-priv").value.trim());
+        form.append("password", document.getElementById("dec-pass").value);
+      }
+      r = await fetch(kind === "enc" ? "/api/encrypt" : "/api/decrypt",
+                      { method: "POST", body: form });
+    } catch (e) {
+      log("请求失败: " + e, "err");
+      return;
+    }
+    let data;
+    try {
+      data = await r.json();
+    } catch (e) {
+      log("响应解析失败 (HTTP " + r.status + "): " + e, "err");
+      return;
+    }
+    if (!r.ok && !data.results) { log("请求失败: " + (data.error || r.status), "err"); return; }
+    let ok = 0;
+    for (const item of data.results || []) {
+      if (item.ok) {
+        ok++;
+        let msg = "[成功] " + item.file + " -> " + item.output +
+                  "（明文 " + human(item.plain) +
+                  (item.cipher !== undefined ? " -> 密文 " + human(item.cipher) : "") + "）";
+        if (item.txt) msg += " [保留 .txt: " + item.txt + "]";
+        log(msg, "ok");
+      } else {
+        log("[失败] " + item.file + ": " + item.error, "err");
+      }
+    }
+    if (!data.results || !data.results.length) log("没有处理任何文件", "err");
+    else if (ok === data.results.length) log("全部完成，共 " + ok + " 个文件", "info");
+    else log("完成 " + ok + "/" + data.results.length + " 个文件", "info");
+  });
+}
+
+document.getElementById("btn-encrypt").onclick = () =>
+  runCrypto("enc").catch((e) => log("界面异常: " + e, "err"));
+document.getElementById("btn-decrypt").onclick = () =>
+  runCrypto("dec").catch((e) => log("界面异常: " + e, "err"));
+
+document.getElementById("btn-reset").onclick = () => {
+  fillDefaults();
+  lastKeydir = (document.getElementById("keydir").value || "").replace(/\/+$/, "");
+  log("已填入默认路径（数据目录: " + window.__cfg.dataDir + "）", "info");
+};
+
+loadConfig();
+</script>
+</body>
+</html>
