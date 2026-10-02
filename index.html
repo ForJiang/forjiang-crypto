@@ -483,10 +483,11 @@ function checkSupport() {
   }
   return null;
 }
-function passwordError(p1, p2, needConfirm) {
+// 只服务加密侧：解密不设长度下限（见解密入口的注释）
+function passwordError(p1, p2) {
   if (!p1) return "请先设置密码";
   if (p1.length < MIN_PASSWORD) return "密码至少 " + MIN_PASSWORD + " 位";
-  if (needConfirm && p1 !== p2) return "两次输入的密码不一致";
+  if (p1 !== p2) return "两次输入的密码不一致";
   return null;
 }
 
@@ -497,7 +498,7 @@ $("encBtn").onclick = async () => {
   const unsupported = checkSupport();
   if (unsupported) { log.__lines = []; say(log, "错误：" + unsupported); return; }
   if (!files.length) { say(log, "请先选择要加密的文件。"); return; }
-  const perr = passwordError(p1, p2, true);
+  const perr = passwordError(p1, p2);
   if (perr) { say(log, perr); return; }
 
   btn.disabled = true;
@@ -555,8 +556,9 @@ $("decBtn").onclick = async () => {
   const unsupported = checkSupport();
   if (unsupported) { log.__lines = []; say(log, "错误：" + unsupported); return; }
   if (!files.length) { say(log, "请先选择要解密的 .forjiang 文件。"); return; }
-  const perr = passwordError(p1, null, false);
-  if (perr) { say(log, perr); return; }
+  // 解密只要求密码非空：CLI 加密不设口令长度下限，短口令的密文也要能解；
+  // 口令对不对交给认证结果说话（错了会报“认证失败”）。
+  if (!p1) { say(log, "请输入密码。"); return; }
 
   btn.disabled = true;
   log.__lines = [];

@@ -173,7 +173,9 @@ python3 -m webui [--host 127.0.0.1] [--port 8765] [--open]
 输出目录）打开时都是空的，由你自己用“浏览...”按钮选或手动输入——不会偷偷
 把密钥和密文写进代码仓库。懒得选时点“填入默认路径”一键填成默认数据目录
 `~/forjiang-crypto` 下的 `keys/`、`vault/`、`restored/`（拿不到可用的主目录
-时退回服务根目录）。路径为空时点按钮会被拦住并提示，服务端同样拒绝空
+时退回服务根目录；设了环境变量 `FORJIANG_CRYPTO_DATA_DIR` 则以它为准，
+测试与多份数据分开存时用得上）。路径为空时点按钮会被拦下并提示，服务端同样
+拒绝空
 `outdir`，不会落到服务根目录。手动改过“密钥目录”后，已填的公钥/私钥路径会
 跟着变，指向别处的自定义路径则保持不动。
 
@@ -283,37 +285,37 @@ tag              末尾 16 B           GCM 认证标签
 ## 打包发布
 
 ```bash
-python3 package.py            # 打包到项目目录旁边
+python3 package.py              # 默认：同一个 x.y 系列里第三位 +1（1.2.0 -> 1.2.1）
+python3 package.py --minor      # 开新小系列：1.2.x -> 1.3.0
+python3 package.py --major      # 开新大版本：1.2.x -> 2.0.0
+python3 package.py --dry-run    # 只看会打成什么版本号
 ```
 
-每次打包：**版本号在同一个 `x.y` 系列里第三位 +1**（例如 1.1.0 ->
-1.1.1 -> 1.1.2），`pyproject.toml` 与
+打包时 `pyproject.toml` 与
 `forjiang_crypto/__init__.py` 里的版本号同步改成新值，新 zip 以
 `forjiang-crypto-<版本>.zip` 命名，**已有的旧包一律保留、不做任何改动**。
-新版本号取“已存在的最大第三位”与“当前版本号的第三位”中较大者加一，所以即使
-手工改过版本号也不会覆盖或回退。`--dry-run` 只看会发生什么，`--out 目录` 换
-输出位置。排除 `__pycache__`/`.pyc`/`.DS_Store`；`.command` 启动器在包里
-强制带可执行位，解压后 macOS 可直接双击。想推进到新系列（如 1.2.x）就改
-`pyproject.toml` 和 `__init__.py` 里的版本号再打包，探测逻辑会自动跟上。
+同系列打包时新版本号取“已存在的最大第三位”与“当前版本号的第三位”中较大者
+加一，即使手工改过版本号也不会覆盖或回退；`--minor/--major` 开新系列时，该
+系列还没有打过包就原样采用新版本号（1.2.0 打 `--minor` 就是 1.3.0，不跳号）。
+`--out 目录` 换输出位置。排除 `__pycache__`/`.pyc`/`.DS_Store`/`.venv`；
+`.command` 启动器在包里强制带可执行位，解压后 macOS 可直接双击。
 
 ## 测试
 
 ```bash
-python3 tests/test_crypto.py    # 含文件名兼容性九项：非法 UTF-8 名字、
-                                 # 控制字符、路径穿越、Windows 保留名与
-                                 # 非法字符、超长名截断、跨平台还原等
-python3 tests/test_cli.py       # 含子进程真实调用 CLI，覆盖口令/--force/
-                                 # --keep-txt/错误路径，以及一个文件读不了
-                                 # 时其余文件照常处理的批量容错
+python3 tests/test_crypto.py    # 库级：格式/流式加解密/密码模式/文件名兼容/
+                                 # OpenSSH 私钥/块长度回归（网页版超大块拒解）
+python3 tests/test_cli.py       # 子进程真实调用 CLI，覆盖口令/--force/
+                                 # --keep-txt/错误路径/批量容错/超长密文名
 python3 tests/test_webui.py     # 真实起 HTTP 服务走完整流程：简版/完整版
                                  # 路由、页面接口地址一致性、端口自动切换与
-                                 # 换端口提示、启动器装依赖兜底链守门、
-                                 # 超长/非法上传名不 500、zip 不互相覆盖等
+                                 # 换端口提示、启动器装依赖兜底链守门、原生
+                                 # 选择框容错与诊断、数据目录隔离、zip 不互相覆盖等
 python3 tests/test_package.py   # 打包脚本：排除 .venv/node_modules/__pycache__、
-                                 # 同系列第三位 +1 且不回退
+                                 # 同系列第三位 +1 且不回退、--minor/--major 不跳号
 ```
 
-一共 98 项（缺 bcrypt 的环境会跳过一项加密 OpenSSH 测试），全绿即“可交付”。
+一共 118 项（缺 bcrypt 的环境会跳过一项加密 OpenSSH 测试），全绿即“可交付”。
 
 ## 目录结构
 
@@ -329,7 +331,8 @@ forjiang-crypto/
 ├── tests/
 │   ├── test_crypto.py  库级测试
 │   ├── test_cli.py     CLI 级测试
-│   └── test_webui.py   Web 界面端到端测试
+│   ├── test_webui.py   Web 界面端到端测试
+│   └── test_package.py 打包脚本测试
 ├── webui/
 │   ├── __init__.py
 │   ├── __main__.py     python3 -m webui 入口

@@ -211,7 +211,6 @@ def decrypt_stream(fin, fout, private_key, progress=None):
     临时文件并在本函数抛异常时丢弃（用 _atomic_output 包装即可）。
     """
     result, header, nonce, wrapped = parse_header(fin)
-    data_offset = len(header)
 
     try:
         aes_key = unwrap_key(wrapped, private_key)
@@ -267,7 +266,9 @@ def _sanitize_name(name):
     name = name.replace("\\", "/")
     base = os.path.basename(name.rstrip("/"))
     base = base or str(name)
-    if not base or base in (".", ".."):
+    # 全是斜杠的名字（如 "/"）：basename 出来还是它自己，若放行，
+    # os.path.join(out_dir, "/") 会还原到根目录——必须按无名处理
+    if not base or base in (".", "..") or not base.strip("/"):
         return "unnamed"
     base = _drop_control_chars(base) or "unnamed"
     encoded = _fs_encode(base)
@@ -488,7 +489,9 @@ def decrypt_forjiang(input_path, out_dir, private_key, keep_txt=False, force=Fal
     restored_path = os.path.join(out_dir, restored_name)
 
     def _occupied(path):
-        """目标是否已被占用：不存在或内容与刚解出的明文一致，都视为可安置。"""
+        """目标名是否被占：只有“文件已存在、内容与新解出的明文不同、
+        且没有 force”时才算占住（此时调用方要报错）；不存在、内容一致、
+        或 force=True 都返回 False，允许安置。"""
         if not os.path.exists(path):
             return False
         if force:
@@ -505,8 +508,9 @@ def decrypt_forjiang(input_path, out_dir, private_key, keep_txt=False, force=Fal
 
         if _occupied(txt_path):
             raise FileExistsError(f"输出已存在且内容不同: {txt_path} (force=True 可覆盖)")
-        if os.path.exists(txt_path):
-            # 内容一致的中转件已在位(不一致前面已经抛错)，无需替换
+        if os.path.exists(txt_path) and filecmp.cmp(txt_path, staging, shallow=False):
+            # 中转件已在位且内容一致（“解密回原位”场景），无需替换；
+            # 注意 force=True 且内容不同时必须用新明文替换，不能沿用旧件
             os.unlink(staging)
         else:
             os.replace(staging, txt_path)
@@ -548,7 +552,6 @@ def decrypt_forjiang(input_path, out_dir, private_key, keep_txt=False, force=Fal
 
 _PASSWORD_PREFIX = struct.Struct("!8sBBI")
 _SALT_AND_NAME = struct.Struct("!BH")
-_CHUNK_HEADER = struct.Struct("!QI")  # 块序号 + 密文长度，仅内存中使用
 
 
 def _derive_key(password, salt, iterations):
@@ -587,7 +590,8 @@ def password_encrypt_file(input_path, output_path, password, iterations=PBKDF2_I
         + name_bytes
     )
 
-    def _seal_chunk(key, header, index, plaintext):
+    def _seal_chunk(index, plaintext):
+        """加密一块：AAD 绑定整个文件头与块序号，块内 iv 随机。"""
         iv = os.urandom(NONCE_LEN)
         enc = Cipher(algorithms.AES(key), modes.GCM(iv)).encryptor()
         enc.authenticate_additional_data(header + struct.pack("!Q", index))
@@ -603,13 +607,13 @@ def password_encrypt_file(input_path, output_path, password, iterations=PBKDF2_I
                 chunk = fin.read(CHUNK_SIZE)
                 if not chunk:
                     break
-                fout.write(_seal_chunk(key, header, index, chunk))
+                fout.write(_seal_chunk(index, chunk))
                 index += 1
                 done += len(chunk)
                 if progress is not None:
                     progress(done)
-            # 结束块：明为空但带认证 tag，缺了它说明文件被截断
-            fout.write(_seal_chunk(key, header, index, b""))
+            # 结束块：明文为空但带认证 tag，缺了它说明文件被截断
+            fout.write(_seal_chunk(index, b""))
 
     return Result(
         origin=origin,
@@ -672,7 +676,8 @@ def password_decrypt_stream(fin, fout, password, progress=None):
 
     index = 0
     done = 0
-    saw_terminator = False
+    # 循环唯一出口是遇到结束块 break（其余路径全部抛错），所以走到这里
+    # 必然已经验证过结束块的认证 tag，截断文件到不了这一行。
     while True:
         head = fin.read(NONCE_LEN + 4)
         if not head:
@@ -695,16 +700,13 @@ def password_decrypt_stream(fin, fout, password, progress=None):
             raise TamperError("认证失败：密码错误，或文件已被篡改") from None
 
         index += 1
-        if ct_len == TAG_LEN:  # 结束块
-            saw_terminator = True
+        if ct_len == TAG_LEN:  # 结束块：明文为空、只剩认证 tag
             break
         fout.write(plaintext)
         done += len(plaintext)
         if progress is not None:
             progress(done)
 
-    if not saw_terminator:
-        raise HeaderError("文件缺少结束块，可能被截断")
     return Result(
         origin=original_name,
         original_size=done,

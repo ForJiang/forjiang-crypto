@@ -157,6 +157,34 @@ class TestCli(unittest.TestCase):
                 "--out", back, "--quiet")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_password_mode_decrypt_long_cipher_name(self):
+        """名字贴着 NAME_MAX 的密文也能解：隐藏中转件的前缀要算进长度预算。
+
+        实测踩坑：早期 staging 名是固定前缀 ".forjiang-staging-"（18 字节）直接
+        拼密文名，密文名一长（超过 237 字节）就 ENAMETOOLONG，解密失败。
+        这里造一个自身合法（≤255 字节）、但拼上前缀就超限的密文名。
+        """
+        # 210 + 24 = 234 字节；+.forjiang 后 243 字节 ≤ 255 能落盘，
+        # 但 18 + 243 = 261 > 255，正好命中旧实现的坑
+        long_stem = "长" * 70 + "a" * 24
+        vault = self.path("longname-vault")
+        os.makedirs(vault)
+        payload = os.urandom(1000)
+        tmp_src = self.path("long-payload.bin")
+        with open(tmp_src, "wb") as fh:
+            fh.write(payload)
+        from forjiang_crypto import password_encrypt_file
+        password_encrypt_file(tmp_src, os.path.join(vault, long_stem + ".forjiang"),
+                              "pw-123456", origin=long_stem + ".bin")
+        r = run("decrypt", vault, "--content-password", "pw-123456",
+                "--out", self.path("longname-back"), "--quiet")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        restored = self.path("longname-back", long_stem + ".bin")
+        self.assertTrue(os.path.isfile(restored),
+                        os.listdir(self.path("longname-back")))
+        with open(restored, "rb") as fh:
+            self.assertEqual(fh.read(), payload)
+
     def test_encrypt_duplicate_then_force(self):
         uploads = self.path("up2")
         vault = self.path("v2")

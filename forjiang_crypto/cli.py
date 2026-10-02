@@ -57,9 +57,8 @@ def _sniff_mode(path):
 def _human(n):
     for unit in ("B", "KiB", "MiB", "GiB"):
         if n < 1024 or unit == "GiB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+            return f"{n} B" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
-    return f"{n} B"
 
 
 def _progress_printer(label):
@@ -67,9 +66,10 @@ def _progress_printer(label):
 
     def cb(done):
         nonlocal last
-        pct = done // (8 * 1024 * 1024)
-        if pct != last:
-            last = pct
+        # 每 8 MiB 打一行：太密会刷屏，太疏大文件显得像卡死
+        mark = done // (8 * 1024 * 1024)
+        if mark != last:
+            last = mark
             print(f"    {label} 已处理 {_human(done)}", flush=True)
 
     return cb
@@ -137,8 +137,11 @@ def cmd_keygen(args):
     return 0
 
 
+STAGING_PREFIX = ".forjiang-staging-"
+
+
 def cmd_encrypt(args):
-    password = getattr(args, "content_password", None)
+    password = args.content_password
     if password and args.pub:
         print("错误：--pub 与 --content-password 只能选一个（公钥模式 / 密码模式）。",
               file=sys.stderr)
@@ -227,7 +230,7 @@ def _load_private_with_prompt(path, password, password_env):
 
 
 def cmd_decrypt(args):
-    password = getattr(args, "content_password", None)
+    password = args.content_password
     if not password and not args.priv:
         print("错误：解密需要 --priv（私钥模式）或 --content-password（密码模式）之一。",
               file=sys.stderr)
@@ -251,10 +254,13 @@ def cmd_decrypt(args):
                 if not password:
                     raise HeaderError(
                         "这是密码模式加密的文件，请用 --content-password 提供内容密码")
-                # 中转件名按当前平台清洗：密文名里若带 : * ? 或过长，写盘会失败
+                # 中转件名按当前平台清洗：密文名里若带 : * ? 或过长，写盘会失败；
+                # 固定前缀 STAGING_PREFIX 也要算进长度预算，名字贴着 NAME_MAX
+                # 的密文才不会因为拼上前缀而 ENAMETOOLONG
                 staging = os.path.join(
-                    out_dir, ".forjiang-staging-" + _disk_name(os.path.basename(path),
-                                                              out_dir, 0))
+                    out_dir,
+                    STAGING_PREFIX + _disk_name(os.path.basename(path), out_dir,
+                                                len(STAGING_PREFIX)))
                 r = password_decrypt_file(
                     path, staging, password,
                     progress=None if args.quiet else _progress_printer(os.path.basename(path)),
@@ -320,7 +326,8 @@ def build_parser():
     p.add_argument("--content-password", help="内容密码（密码模式；与 --pub 二选一）")
     p.add_argument("--out", help="输出目录（默认与输入同目录）")
     p.add_argument("-r", "--recursive", action="store_true", help="递归处理目录")
-    p.add_argument("--keep-txt", action="store_true", help="保留 .txt 中转件")
+    p.add_argument("--keep-txt", action="store_true",
+                   help="保留 .txt 中转件（公钥模式的流程有中转件；密码模式没有）")
     p.add_argument("--force", action="store_true", help="覆盖已存在的输出")
     p.add_argument("--quiet", action="store_true", help="不打印进度")
     p.set_defaults(func=cmd_encrypt)

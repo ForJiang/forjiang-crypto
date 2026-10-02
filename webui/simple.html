@@ -208,7 +208,11 @@ document.querySelectorAll("button.browse").forEach((btn) => {
                                initial: input.value.trim() }),
       });
       const data = await readJson(r);
-      if (r.status === 501) { say_to(btn, "当前环境不能弹系统选择框，请手动输入文件夹路径。"); return; }
+      if (r.status === 501) {
+        // 服务端调不起子进程时会带回原因（比如没装 tkinter、没有图形会话）
+        say_to(btn, "弹不出系统选择框：" + (data.error || "当前环境不支持，请手动输入路径。"), "err");
+        return;
+      }
       if (!r.ok) { say_to(btn, "选择失败: " + (data.error || r.status)); return; }
       if (data.path) { input.value = data.path; say_to(btn, "已选择文件夹: " + data.path); }
       else say_to(btn, "已取消选择。");

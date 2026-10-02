@@ -339,6 +339,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"未知路径 {path}"}, status=404)
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=400)
+        except ForjiangCryptoError as exc:
+            # 业务校验失败（模长不够、密钥文件读不了/解析不了等）是客户端可修正的
+            # 问题，按 400 回干净的一句话；此前会掉进 500 并在控制台甩堆栈
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
         except Exception as exc:  # 兜底：绝不给浏览器回 traceback
             # 堆栈只打到启动器控制台，方便排查；浏览器只拿到一行干净的错误
             traceback.print_exc()
@@ -452,9 +456,10 @@ class Handler(BaseHTTPRequestHandler):
         # 文件夹模式：产物打包成单个 zip（浏览器通常会拦截多个自动下载）
         if folder and outputs:
             # zip 名带本次请求的唯一后缀：同名文件夹连续处理两次时，
-            # 上一次还没下载的包不会被覆盖；文件夹名按平台清洗
+            # 上一次还没下载的包不会被覆盖；文件夹名按平台清洗。
+            # 长度预算取两种后缀里较长的那个："-forjiang-"(10) + token(10) + ".zip"(4)
             tag = _disk_name(
-                os.path.basename(folder.rstrip("/\\")) or "folder", out_dir, 20)
+                os.path.basename(folder.rstrip("/\\")) or "folder", out_dir, 24)
             zip_path = os.path.join(
                 out_dir,
                 f"{tag}{'-forjiang' if encrypting else '-解密'}-{token}.zip")
@@ -499,8 +504,9 @@ class Handler(BaseHTTPRequestHandler):
         bits = int(data.get("bits") or 3072)
         out_dir = (data.get("outdir") or "keys").strip()
         password = (data.get("password") or "").strip() or None
-        os.makedirs(out_dir, exist_ok=True)
+        # 先生成再建目录：模长不合法等失败不该留下一个空目录
         keypair = generate_keypair(bits)
+        os.makedirs(out_dir, exist_ok=True)
         pub_path, priv_path = save_keypair(
             keypair, out_dir, name=str(data.get("name") or "forjiang"), password=password
         )

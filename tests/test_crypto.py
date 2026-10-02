@@ -248,6 +248,26 @@ class TestUploadFlow(Base):
             self.assertEqual(fh.read(), b"content")
         self.assertFalse(os.path.exists(self.path("exist.doc.txt")))
 
+    def test_decrypt_force_replaces_stale_txt_intermediate(self):
+        """force=True 时旧的 .txt 中转件必须被新明文替换。
+
+        实测踩坑：早期实现里“中转件已在位就沿用”的条件没有把 force 排除在外，
+        force 覆盖一个内容已被别人改过的 .txt 时，新解出的明文被丢弃、
+        恢复出来的却是旧中转件的内容——解密“成功”了，内容却是错的。
+        """
+        src = self.write("stale.bin", b"fresh plaintext")
+        r = encrypt_uploaded(src, self.tmp, self.pub)
+        back = decrypt_forjiang(r.output_path, self.tmp, self.priv, keep_txt=True)
+        txt = self.path("stale.bin.txt")
+        self.assertTrue(os.path.exists(txt))
+        # 有人在中转件位置放了别的内容
+        with open(txt, "wb") as fh:
+            fh.write(b"stale garbage")
+        out = decrypt_forjiang(r.output_path, self.tmp, self.priv, force=True)
+        with open(out.restored_path, "rb") as fh:
+            self.assertEqual(fh.read(), b"fresh plaintext", "force 必须落新明文")
+        self.assertFalse(os.path.exists(txt), "默认不保留中转件")
+
     def test_out_dir_separate_from_input(self):
         inbox = tempfile.mkdtemp(dir=self.tmp)
         outbox = tempfile.mkdtemp(dir=self.tmp)
@@ -483,6 +503,18 @@ class TestNameCompatibility(unittest.TestCase):
         cleaned = _sanitize_name(self._name())
         self.assertIsInstance(cleaned, str)
         self.assertNotIn("/", cleaned)
+
+    def test_sanitize_slash_only_name_becomes_unnamed(self):
+        """全是斜杠的名字必须按无名处理。
+
+        basename("/".rstrip("/")) 还是 "/" 自己，若放行，解密恢复时
+        os.path.join(out_dir, "/") 会还原到根目录——文件头里永远不该出现它。
+        """
+        from forjiang_crypto.codec import _sanitize_name
+        for evil in ("/", "//", "///", "/.", "/.."):
+            self.assertEqual(_sanitize_name(evil), "unnamed", evil)
+        # 正常的路径穿越依旧剥成最后一段
+        self.assertEqual(_sanitize_name("../../etc/passwd"), "passwd")
 
     def test_fs_encode_roundtrips_through_fs_decode(self):
         from forjiang_crypto.codec import _fs_decode, _fs_encode

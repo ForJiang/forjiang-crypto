@@ -293,9 +293,10 @@ async function pickPath(btn) {
       }),
     });
     let data = {};
-    try { data = await r.json(); } catch (e) { /* 忽略解析失败，走下面的分支 */ }
+    try { data = await r.json(); } catch (e) { /* 解析失败走下面的分支 */ }
     if (r.status === 501) {
-      log("当前环境不能弹系统选择框，请手动输入路径。", "err");
+      // 服务端调不起子进程时会带回原因（比如没装 tkinter、没有图形会话）
+      log("弹不出系统选择框：" + (data.error || "当前环境不支持，请手动输入路径。"), "err");
       return;
     }
     if (!r.ok) {

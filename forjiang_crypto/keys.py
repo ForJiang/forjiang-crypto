@@ -63,8 +63,8 @@ def save_keypair(keypair, out_dir, name="forjiang", password=None):
         encryption_algorithm=enc,
     )
 
-    _write_private(pub_path, pub_pem, mode=0o644)
-    _write_private(priv_path, priv_pem, mode=0o600)
+    _write_key(pub_path, pub_pem, mode=0o644)
+    _write_key(priv_path, priv_pem, mode=0o600)
     return pub_path, priv_path
 
 
@@ -173,7 +173,10 @@ def _write_key(path, data, mode):
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(prefix=".forjiang-key-", dir=directory)
     try:
-        os.fchmod(fd, mode)
+        # os.fchmod 只在 Unix 上有：Windows 上没有这个调用，
+        # 权限校准交给文件落盘后那次 os.chmod，别让 keygen 直接崩
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, mode)
         with os.fdopen(fd, "wb", closefd=False) as fh:
             fh.write(data)
             fh.flush()
@@ -189,7 +192,3 @@ def _write_key(path, data, mode):
     # umask 可能把权限收得更紧，按传入 mode 校准一次
     with contextlib.suppress(OSError):
         os.chmod(path, mode)
-
-
-def _write_private(path, data, mode):
-    _write_key(path, data, mode)

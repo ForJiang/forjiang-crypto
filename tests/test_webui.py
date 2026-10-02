@@ -278,6 +278,31 @@ class TestWebUI(WebUIBase):
         self.assertTrue(os.path.isfile(os.path.join(keys, "u.pub.pem")))
         self.assertTrue(os.path.isfile(os.path.join(keys, "u.priv.pem")))
 
+    def test_keygen_bad_bits_is_clean_400(self):
+        """业务校验失败按 400 回一句话，而不是 500 + 控制台堆栈。
+
+        实测踩坑：早期 do_POST 只捕 ValueError/Exception，ForjiangCryptoError
+        （模长不够、密钥文件解析失败等）会掉进 500 兜底。
+        """
+        outdir = self.path("kg-bad")
+        status, data = self.post_json("/api/keygen", {"bits": 1024, "outdir": outdir})
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+        self.assertIn("2048", data["error"])
+        # 先校验后建目录：失败不该留下空目录
+        self.assertFalse(os.path.isdir(outdir))
+        # 非数字的 bits 同样是 400
+        status, data = self.post_json("/api/keygen", {"bits": "abc"})
+        self.assertEqual(status, 400)
+
+    def test_full_mode_roundtrip_via_api(self):
+        """完整版接口全流程：keygen -> 批量加密 -> 解密，内容逐字节一致。"""
+        keys = self.path("keys-full")
+        status, data = self.post_json("/api/keygen", {
+            "bits": 2048, "outdir": keys, "name": "u",
+        })
+        self.assertEqual(status, 200, data)
+
         uploads = self.path("uploads")
         vault = self.path("vault")
         back = self.path("back")
