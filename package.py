@@ -31,9 +31,13 @@ PYPROJECT = os.path.join(ROOT, "pyproject.toml")
 INIT_PY = os.path.join(ROOT, "forjiang_crypto", "__init__.py")
 
 EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".venv", "venv",
-                "node_modules", "dist", "build", ".mypy_cache"}
-EXCLUDE_SUFFIX = (".pyc", ".pyo", ".zip")
-EXCLUDE_NAMES = {".DS_Store"}
+                "node_modules", "dist", "build", ".mypy_cache", ".tox",
+                ".ruff_cache", ".idea", ".vscode"}
+EXCLUDE_SUFFIX = (".pyc", ".pyo", ".zip", ".lock")
+EXCLUDE_NAMES = {".DS_Store", "uv.lock", ".coverage"}
+# setuptools/uv 的构建产物目录：pip install . 会留下 xxx.egg-info，
+# uv 会写 uv.lock，它们都不是发布包该带的东西
+EXCLUDE_DIR_SUFFIXES = (".egg-info",)
 
 VERSION_RE = re.compile(r'^(\s*version\s*=\s*")(\d+)\.(\d+)\.(\d+)(")', re.M)
 INIT_VERSION_RE = re.compile(r'(__version__\s*=\s*")(\d+)\.(\d+)\.(\d+)(")')
@@ -110,7 +114,10 @@ def write_version(version):
 
 def iter_files():
     for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIRS)
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in EXCLUDE_DIRS and not d.endswith(EXCLUDE_DIR_SUFFIXES)
+        )
         for name in sorted(filenames):
             if name in EXCLUDE_NAMES or name.endswith(EXCLUDE_SUFFIX):
                 continue

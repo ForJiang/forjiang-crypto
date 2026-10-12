@@ -23,6 +23,7 @@ def fake_tree(base):
     os.makedirs(os.path.join(src, "node_modules", "left-pad"))
     os.makedirs(os.path.join(src, "__pycache__"))
     os.makedirs(os.path.join(src, ".git"))
+    os.makedirs(os.path.join(src, "forjiang_crypto.egg-info"))
     os.makedirs(os.path.join(src, "forjiang_crypto"))
     with open(os.path.join(src, "forjiang_crypto", "__init__.py"), "w") as fh:
         fh.write("")
@@ -31,7 +32,10 @@ def fake_tree(base):
     for junk in ((".venv/bin/big.so", 1024), ("venv/bin/libpython.so", 512),
                  ("node_modules/left-pad/index.js", 64),
                  ("__pycache__/x.pyc", 32), (".git/config", 16),
-                 ("package.zip", 8)):
+                 ("package.zip", 8),
+                 ("forjiang_crypto.egg-info/PKG-INFO", 128),
+                 ("forjiang_crypto.egg-info/SOURCES.txt", 64),
+                 ("uv.lock", 4096), (".coverage", 32)):
         with open(os.path.join(src, *junk[0].split("/")), "w") as fh:
             fh.write("x" * junk[1])
     return src
@@ -75,6 +79,20 @@ class TestPackage(unittest.TestCase):
         rels = self.files()
         self.assertFalse(any(r.startswith(".venv") or r.startswith("venv")
                              for r in rels), rels)
+
+    def test_build_artifacts_excluded(self):
+        """pip install . 留下的 egg-info、uv 写的 uv.lock 都不能进发布包。
+
+        实测踩坑：本地跑过一次 pip install . 后，打包脚本的排除名单里没有
+        *.egg-info 与 *.lock，构建产物被直接扫进 zip（并差点同步进仓库）。
+        """
+        rels = self.files()
+        for banned in ("egg-info", ".lock", ".coverage"):
+            self.assertFalse(any(banned in r for r in rels),
+                             f"打包带进了构建产物 {banned}: {rels}")
+        self.assertTrue(all(not r.endswith(".zip") for r in rels), rels)
+        self.assertIn("forjiang_crypto/__init__.py", rels)
+        self.assertIn("requirements.txt", rels)
 
     def test_bump_stays_in_series(self):
         """同系列第三位 +1，且永不小于已有包里的最大第三位。"""
