@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: forjiang-crypto
+Version: 1.2.1
+Summary: AES-256-GCM 文件加密系统：公钥封装会话密钥，上传文件统一改 .txt 后加密为 .forjiang
+Requires-Python: >=3.8
+Requires-Dist: cryptography>=3.4

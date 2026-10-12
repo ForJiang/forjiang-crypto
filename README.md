@@ -7,6 +7,21 @@ AES-256-GCM 文件加密系统。上传的文件先统一改成 `.txt`，加密�
 每个文件一把随机 AES-256 会话密钥加密内容，会话密钥用 RSA-OAEP(SHA-256)
 封装后写进文件头。解密必须有对应私钥。
 
+两种用法，文件格式完全一致、双向互通：
+
+| | 在线页面（免安装） | Python 桌面版 |
+| --- | --- | --- |
+| 入口 | <https://forjiang.github.io/forjiang-crypto/> | CLI `python3 -m forjiang_crypto` + 本地网页界面（双击启动器） |
+| 加密方式 | 密码（PBKDF2 60 万次派生） | 密码，或 RSA 公钥封装会话密钥 |
+| 依赖 | 零（浏览器 WebCrypto，文件不出本机） | 一个第三方依赖 `cryptography` |
+| 源码位置 | 本仓库根目录 `index.html`（纯静态） | `forjiang_crypto/` + `webui/` |
+
+> 在线页面是纯静态的，关掉页面即无痕迹。**密码模式**下两边完全互通：
+> 网页加密的文件可以用桌面版解密，桌面版用 `--content-password` 加密的文件
+> 也能拿到网页上解（多文件、中文与西里尔文件名、几百 MB 的大文件都行——
+> 网页端按 1 MiB 定长分块流式处理，不留整份文件在内存里）。
+> 桌面版独有的 RSA 公钥模式只能由桌面版解。
+
 ## 安装
 
 ```bash
@@ -341,7 +356,8 @@ forjiang-crypto/
 │   └── index.html      完整版界面（公钥模式，在 /full）
 ├── 打开网页界面.command   macOS 双击启动（网页界面）
 ├── start-webui.bat       Windows 双击启动（网页界面）
-├── package.py            打包脚本（版本第三位 +1，不覆盖旧包）
+├── index.html            在线页面（纯静态，部署到 GitHub Pages 的那个）
+├── package.py            打包脚本（同系列第三位 +1，不覆盖旧包）
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md

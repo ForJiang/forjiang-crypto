@@ -1,0 +1,2 @@
+[console_scripts]
+forjiang-crypto = forjiang_crypto.cli:main
