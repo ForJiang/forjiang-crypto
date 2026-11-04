@@ -1,5 +1,11 @@
 # forjiang-crypto
 
+> AES-256-GCM 文件加密系统：浏览器在线版（零依赖 WebCrypto，流式分块）+ Python 桌面版（CLI/本地界面，RSA-OAEP 公钥混合加密），同一 .forjiang 格式，密码模式双向互通；文件不出本机
+>
+> AES-256-GCM file encryption: browser edition (zero-dependency WebCrypto) + Python desktop edition (CLI/local UI, RSA-OAEP hybrid), one shared .forjiang format, interoperable password mode; files never leave your machine
+
+English intro at the bottom: [English](#english)
+
 AES-256-GCM 文件加密系统。上传的文件先统一改成 `.txt`，加密后把后缀改为
 `.forjiang`；解密是相反的流程。
 
@@ -362,3 +368,92 @@ forjiang-crypto/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## English
+
+**forjiang-crypto** is an AES-256-GCM file encryption system with two editions sharing one `.forjiang` format: a browser-based online edition (zero-dependency WebCrypto, streaming chunked processing) and a Python desktop edition (CLI plus a local web UI). Password mode is interoperable both ways between the two editions, and files never leave your machine.
+
+### Two editions at a glance
+
+| | Online page (no install) | Python desktop edition |
+| --- | --- | --- |
+| Entry | <https://forjiang.github.io/forjiang-crypto/> | CLI `python3 -m forjiang_crypto` + local web UI (double-click launcher) |
+| Encryption | password (PBKDF2, 600,000 iterations) | password, or RSA public key wrapping the session key |
+| Dependencies | none (browser WebCrypto; files stay local) | one third-party dependency: `cryptography` |
+| Source | repo root `index.html` (pure static) | `forjiang_crypto/` + `webui/` |
+
+The online page is pure static and leaves no trace once closed. In **password mode** both editions are fully interoperable — a file encrypted on the web page decrypts in the desktop edition and vice versa (multiple files, Chinese and Cyrillic filenames, files of several hundred MB; the web edition streams in fixed 1 MiB chunks and never holds a whole file in memory). The desktop-only RSA public-key mode can only be decrypted by the desktop edition.
+
+### How the hybrid encryption works
+
+Each file gets its own random AES-256 session key to encrypt the content; the session key is wrapped with RSA-OAEP (SHA-256) and written into the file header. Encryption needs only the public key — the private key never takes part on the encryption side — and decryption requires the matching private key. In password mode the AES-256 key is derived with PBKDF2-SHA256 (600,000 iterations), and decryption auto-detects the mode (public-key vs password) from the file header magic, so a mixed directory decrypts in one call given both credentials.
+
+### Install
+
+```bash
+pip install -r requirements.txt   # or: pip install .
+```
+
+`requirements.txt` lists exactly one third-party dependency: `cryptography>=3.4`. Installation is optional — drop the repo anywhere, `cd` in and run `python3 -m forjiang_crypto ...` (or point `PYTHONPATH` at the repo root); after `pip install .` you also get a `forjiang-crypto` command. Python 3.8+. On uv-managed Python that rejects pip (`externally-managed-environment`), the launcher falls back through `uv pip install --system` → plain `pip` → `pip install --user` → `pip install --break-system-packages`, and finally creates an isolated `.venv` inside the project.
+
+### Quick start
+
+```bash
+# 1) Generate a key pair (RSA-3072 by default; private key written with 0600 permissions)
+python3 -m forjiang_crypto keygen --out ./keys
+
+# 2) Encrypt: everything under uploads/ -> matching .forjiang files under vault/
+python3 -m forjiang_crypto encrypt ./uploads \
+    --pub ./keys/forjiang.pub.pem --out ./vault -r
+
+# 3) Decrypt: every .forjiang under vault/ -> restored original files
+python3 -m forjiang_crypto decrypt ./vault \
+    --priv ./keys/forjiang.priv.pem --out ./restored -r
+```
+
+Password mode (the two modes are mutually exclusive; decrypt auto-routes per file):
+
+```bash
+python3 -m forjiang_crypto encrypt ./photo.png --content-password 'your password' --out ./vault
+
+python3 -m forjiang_crypto decrypt ./vault --priv ./keys/forjiang.priv.pem \
+    --content-password 'your password' --out ./restored
+```
+
+Python API (the web UI is a thin shell over this library; artifacts are byte-identical to the CLI's):
+
+```python
+from forjiang_crypto import generate_keypair, encrypt_uploaded, decrypt_forjiang
+
+kp = generate_keypair(2048)                 # or save_keypair then load_*
+r = encrypt_uploaded("uploads/photo.png", "vault", kp.public_key)
+# r.output_path == "vault/photo.png.forjiang"
+
+back = decrypt_forjiang("vault/photo.png.forjiang", "restored", kp.private_key)
+# back.restored_path == "restored/photo.png", byte-identical to the original
+```
+
+`encrypt_stream(fin, fout, pub)` / `decrypt_stream(fin, fout, priv)` work directly on file objects, so you can wire them into your own upload/download flow without intermediate files on disk.
+
+### The .forjiang format
+
+An 8-byte magic `FORJANG1`, version/flags, nonce and tag lengths, the wrapped session key, the original filename (UTF-8, basename only), the plaintext size, then AES-256-GCM ciphertext with a 16-byte GCM tag at the end. The entire header (wrapped key, nonce and original name included) is authenticated as GCM AAD; the header is capped at 64 KiB and filenames at 512 bytes.
+
+Key security properties: a fresh random 96-bit nonce and 256-bit session key per file from `os.urandom` (the same plaintext never encrypts to the same bytes twice); 1 MiB streaming chunks, so memory use is independent of file size (GB-scale files work); atomic writes via a hidden temp file plus `os.replace`, with temp files cleaned up on any failure including Ctrl-C; any tampering — renamed file, modified ciphertext, truncation, wrong private key — is rejected by the GCM tag at finalize with `TamperError`, never yielding partial plaintext; the stored filename is reduced to its basename so path traversal cannot escape the output directory.
+
+### Local web UI
+
+The desktop edition includes double-click launchers (`打开网页界面.command` on macOS, `start-webui.bat` on Windows) that locate Python, install the missing dependency, start the server and open the browser. The server binds to `127.0.0.1` only — it reads and writes local files at the paths you choose, so switch to `--host 0.0.0.0` only on a trusted network and knowingly. The five path fields (key directory, public/private key, encrypt/decrypt output) start empty and are filled via native file-picker dialogs or typed by hand. The simple edition (`/`, password mode) and the full edition (`/full`, public-key mode) share one design, produce interoperable artifacts, and decryption auto-detects the mode from the header magic.
+
+### Tests
+
+```bash
+python3 tests/test_crypto.py    # library level: format, streaming, password mode, filename compat
+python3 tests/test_cli.py       # real CLI subprocesses
+python3 tests/test_webui.py     # end-to-end HTTP service
+python3 tests/test_package.py   # packaging script
+```
+
+118 tests in total (stdlib unittest, no pytest required; the OpenSSH-encryption test is skipped when `bcrypt` is missing).
