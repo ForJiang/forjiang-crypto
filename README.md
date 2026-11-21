@@ -1,8 +1,8 @@
 # forjiang-crypto
 
-> AES-256-GCM 文件加密系统：浏览器在线版（零依赖 WebCrypto，流式分块）+ Python 桌面版（CLI/本地界面，RSA-OAEP 公钥混合加密），同一 .forjiang 格式，密码模式双向互通；文件不出本机
+> AES-256-GCM 文件加密：网页版 + Python 桌面版，同一格式互通
 >
-> AES-256-GCM file encryption: browser edition (zero-dependency WebCrypto) + Python desktop edition (CLI/local UI, RSA-OAEP hybrid), one shared .forjiang format, interoperable password mode; files never leave your machine
+> AES-256-GCM file encryption: browser + Python desktop editions sharing one format
 
 English intro at the bottom: [English](#english)
 
@@ -457,3 +457,7 @@ python3 tests/test_package.py   # packaging script
 ```
 
 118 tests in total (stdlib unittest, no pytest required; the OpenSSH-encryption test is skipped when `bcrypt` is missing).
+
+## License
+
+本项目以 [GPL-3.0](LICENSE) 许可发布 © 2026 ForJiang / Released under the [GPL-3.0](LICENSE).
